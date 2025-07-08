@@ -2,7 +2,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import HtmlWebpackPlugin from 'html-webpack-plugin';
 import MiniCssExtractPlugin from 'mini-css-extract-plugin';
-import CopyWebpackPlugin from "copy-webpack-plugin";
+
+const mode = process.env.NODE_ENV || 'development';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,8 +20,11 @@ export default {
     rules: [
       {
         test: /\.css$/i,
-        use: [MiniCssExtractPlugin.loader, 'css-loader'],
-      },
+        use: [
+          mode === 'production' ? MiniCssExtractPlugin.loader : 'style-loader',
+          'css-loader'
+        ],
+      }
     ],
   },
   plugins: [
@@ -30,17 +34,15 @@ export default {
     new MiniCssExtractPlugin({
       filename: '[name].[contenthash].css',
       
-    }),
-    new CopyWebpackPlugin({
-    patterns: [
-      { from: 'raw-images', to: 'raw-images' }
-    ]
-  })
+    })
   ],
   devServer: {
-    static: path.resolve(__dirname, 'public'),
+    static: {
+      directory: path.resolve(__dirname, 'dist'),
+    },
     port: 8080,
     open: true,
+    hot: true
   },
   mode: 'development',
 };
