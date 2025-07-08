@@ -2,6 +2,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import HtmlWebpackPlugin from 'html-webpack-plugin';
 import MiniCssExtractPlugin from 'mini-css-extract-plugin';
+import CopyWebpackPlugin from 'copy-webpack-plugin';
 
 const mode = process.env.NODE_ENV || 'development';
 
@@ -15,7 +16,7 @@ export default {
   output: {
     filename: '[name].[contenthash].js',
     path: path.resolve(__dirname, 'dist'),
-    publicPath: mode === 'production' ? './' : '/',
+    publicPath: '/webpack-onotoYSazon/',
     clean: true,
   },
 
@@ -44,12 +45,15 @@ export default {
     new MiniCssExtractPlugin({
       filename: '[name].[contenthash].css',
     }),
+    new CopyWebpackPlugin({
+      patterns: [
+        { from: 'public/.nojekyll', to: '.' }
+      ],
+    }),
   ],
 
   devServer: {
-    static: {
-      directory: path.resolve(__dirname, 'public'),
-    },
+    static: false,   // serve only the in‑memory assets
     port: 8080,
     open: true,
     hot: true,
