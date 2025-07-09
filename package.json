@@ -7,12 +7,15 @@
   "author": "Anthony Arellano -anthonyarellano70@gmail.com",
   "type": "module",
   "main": "index.js",
+
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "npm run clean && webpack --mode production",
+    "build": "npm run clean && NODE_ENV=production webpack --mode production",
+    "build:github": "npm run clean && NODE_ENV=production webpack --mode production",
     "start": "webpack serve --open --mode development",
-    "deploy": "gh-pages -d dist"
-  },
+    "deploy": "npm run build:github && gh-pages -d dist"
+  }
+,
 
   "devDependencies": {
     "copy-webpack-plugin": "^13.0.0",
