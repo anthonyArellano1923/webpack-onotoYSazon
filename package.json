@@ -2,10 +2,7 @@
   "name": "onotoysazon",
   "version": "1.0.0",
   "description": "A practice project for webpack packaging.",
-  "keywords": [
-    "webpack",
-    "javascript"
-  ],
+  "keywords": ["webpack", "javascript"],
   "license": "MIT",
   "author": "Anthony Arellano -anthonyarellano70@gmail.com",
   "type": "module",
@@ -13,9 +10,10 @@
   "scripts": {
     "clean": "rm -rf dist",
     "build": "npm run clean && webpack --mode production",
-    "start": "webpack-dev-server --open --mode development",
+    "start": "webpack serve --open --mode development",
     "deploy": "gh-pages -d dist"
   },
+
   "devDependencies": {
     "copy-webpack-plugin": "^13.0.0",
     "css-loader": "^7.1.2",
