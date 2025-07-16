@@ -2,27 +2,27 @@
   "name": "onotoysazon",
   "version": "1.0.0",
   "description": "A practice project for webpack packaging.",
-  "keywords": ["webpack", "javascript"],
+  "keywords": [
+    "webpack",
+    "javascript"
+  ],
   "license": "MIT",
   "author": "Anthony Arellano -anthonyarellano70@gmail.com",
   "type": "module",
-  "main": "index.js",
-
+  "source": "/src/index.html",
   "scripts": {
-    "clean": "rm -rf dist",
-    "build": "npm run clean && NODE_ENV=production webpack --mode production",
-    "build:github": "npm run clean && NODE_ENV=production webpack --mode production",
-    "start": "webpack serve --open --mode development",
-    "deploy": "npm run build:github && gh-pages -d dist"
-  }
-,
-
+    "start": "parcel serve --port 8080 src/index.html",
+    "build": "parcel build src/index.html --public-url ./",
+    "deploy": "gh-pages -d dist"
+  },
   "devDependencies": {
     "copy-webpack-plugin": "^13.0.0",
     "css-loader": "^7.1.2",
     "gh-pages": "^6.3.0",
     "html-webpack-plugin": "^5.6.3",
     "mini-css-extract-plugin": "^2.9.2",
+    "parcel": "^2.15.4",
+    "posthtml-include": "^2.0.1",
     "style-loader": "^4.0.0",
     "webpack": "^5.99.9",
     "webpack-cli": "^6.0.1",
