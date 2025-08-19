@@ -3,6 +3,7 @@ import { fileURLToPath } from 'url';
 import HtmlWebpackPlugin from 'html-webpack-plugin';
 import MiniCssExtractPlugin from 'mini-css-extract-plugin';
 import CopyWebpackPlugin from 'copy-webpack-plugin';
+import { watch } from 'fs';
 
 const mode = process.env.NODE_ENV || 'development';
 const isProduction = mode === 'production';
@@ -20,6 +21,7 @@ export default {
     clean: true,
   },
   devtool: mode === 'development' ? 'inline-source-map' : false,
+  watch: true,
   module: {
     rules: [
       {

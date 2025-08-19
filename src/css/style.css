@@ -316,7 +316,9 @@ main .contact .contact__photo-container, main .contact-card{
 
 /* Photo card */
 
-.contact .contact__photo-container--image {
+.contact,
+.contact__photo-container--image,
+.tradition__images {
   width: 100%;
   max-width: 27rem;
   height: 30rem;
@@ -326,7 +328,9 @@ main .contact .contact__photo-container, main .contact-card{
 
 /* Photo styles */
 
-.contact .contact__photo-container--image img{
+.contact,
+.contact__photo-container--image img,
+.tradition__images-img img {
   width: 100%;
   max-width: 100%;
   height: 100%;
@@ -385,4 +389,30 @@ main .contact .contact__photo-container, main .contact-card{
   width: 100%;
   height: 100%;
   position: absolute;
+}
+
+/* Sección tradición */
+
+.tradition {
+  flex-direction: column;
+  width: 100%;
+  height: auto;
+  padding: 3rem 0 3rem;
+  margin: auto;
+}
+
+.tradition__images {
+  display: flex;
+  gap: 1rem;
+  width: 90%;
+  max-width: 93rem;
+}
+.tradition__info {
+  display: flex;
+  margin: auto;
+  flex-direction: column;
+  width: 90%;
+  max-width: 93rem;
+  text-align: justify;
+  font-size: var(--sm-font);
 }
