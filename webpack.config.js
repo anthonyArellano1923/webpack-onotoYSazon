@@ -1,75 +1,89 @@
-import path from 'path';
-import { fileURLToPath } from 'url';
+// webpack.config.js (PRODUCCIÓN)
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Plugins
 import HtmlWebpackPlugin from 'html-webpack-plugin';
 import MiniCssExtractPlugin from 'mini-css-extract-plugin';
+import CssMinimizerPlugin from 'css-minimizer-webpack-plugin';
+import TerserPlugin from 'terser-webpack-plugin';
+import { CleanWebpackPlugin } from 'clean-webpack-plugin';
 import CopyWebpackPlugin from 'copy-webpack-plugin';
-import { watch } from 'fs';
 
-const mode = process.env.NODE_ENV || 'development';
-const isProduction = mode === 'production';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// ------------------------------------------------------------------
+
 export default {
-  mode,
-  entry: './src/js/index.js',
+  mode: 'production',
+  entry: path.resolve(__dirname, './src/js/index.js'),
   output: {
-    filename: isProduction ? '[name].[contenthash].js' : '[name].js',
     path: path.resolve(__dirname, 'dist'),
-    // PublicPath dinámico: para desarrollo local usar '/', para GitHub Pages usar '/webpack-onotoYSazon/'
-    publicPath: isProduction ? '/webpack-onotoYSazon/' : '/',
+    filename: '[name].[contenthash].js',
+    publicPath: 'auto', // Para GitHub Pages (ajusta si cambias de repo)
+    assetModuleFilename: 'assets/[name][hash][ext][query]',
     clean: true,
   },
-  devtool: mode === 'development' ? 'inline-source-map' : false,
-  watch: true,
+  devtool: 'source-map',
+  resolve: {
+    extensions: ['.js'],
+    alias: {
+      '@utils': path.resolve(__dirname, 'src/utils'),
+      '@templates': path.resolve(__dirname, 'src/templates'),
+      '@styles': path.resolve(__dirname, 'src/styles'),
+      '@images': path.resolve(__dirname, 'src/assets/images'),
+    },
+  },
   module: {
     rules: [
       {
-        test: /\.css$/i,
-        use: [
-          isProduction ? MiniCssExtractPlugin.loader : 'style-loader',
-          'css-loader',
-        ],
+        // Transpilación JS como en el ejemplo
+        test: /\.m?js$/,
+        exclude: /node_modules/,
+        use: 'babel-loader',
       },
       {
-        test: /\.(png|jpe?g|gif|svg)$/i,
+        // CSS/Stylus extraído en archivos separados
+        test: /\.(css|styl)$/i,
+        use: [MiniCssExtractPlugin.loader, 'css-loader', 'stylus-loader'],
+      },
+      {
+        // Imágenes
+        test: /\.(png|jpe?g|gif|svg|webp|ico)$/i,
         type: 'asset/resource',
         generator: {
-          filename: 'images/[name][ext]'
-        }
+          filename: 'assets/images/[hash][ext][query]',
+        },
+      },
+      {
+        // Fuentes
+        test: /\.(woff2?|eot|ttf|otf)$/i,
+        type: 'asset/resource',
+        generator: {
+          filename: 'assets/fonts/[hash][ext][query]',
+        },
       },
     ],
   },
   plugins: [
     new HtmlWebpackPlugin({
-      template: './public/index.html',
-      filename: 'index.html',
+      inject: true,
+      template: path.resolve(__dirname, './public/index.html'),
+      filename: './index.html',
     }),
-    ...(isProduction ? [
-      new MiniCssExtractPlugin({
-        filename: '[name].[contenthash].css',
-      }),
-    ] : []),
+    new MiniCssExtractPlugin({
+      filename: 'assets/[name].[contenthash].css',
+    }),
+    new CleanWebpackPlugin(),
+    // Mantengo tu copia de .nojekyll para GitHub Pages
     new CopyWebpackPlugin({
-      patterns: [
-        { from: 'public/.nojekyll', to: '.' },
-        // Si tienes otros archivos estáticos en public, cópialos también
-        // { from: 'public/favicon.ico', to: '.' },
-      ],
+      patterns: [{ from: 'public/.nojekyll', to: '.' }],
     }),
   ],
-  devServer: {
-    static: {
-      directory: path.join(__dirname, 'dist'),
-    },
-    port: 8080,
-    open: true,
-    hot: true,
-    // Importante: esto ayuda con el routing en desarrollo
-    historyApiFallback: true,
-  },
-  // Resolver extensiones automáticamente
-  resolve: {
-    extensions: ['.js', '.css'],
+  optimization: {
+    minimize: true,
+    minimizer: [new CssMinimizerPlugin(), new TerserPlugin()],
+    runtimeChunk: 'single',
   },
 };
