@@ -1,0 +1,42 @@
+[
+  {
+    "id": "whatsapp",
+    "name": "WhatsApp",
+    "url": "https://wa.me/message/T6P5RENJ5MNOO1",
+    "icon": "https://upload.wikimedia.org/wikipedia/commons/6/6b/WhatsApp.svg",
+    "alt": "whatsapp-logo",
+    "backgroundColor": "rgba(37, 211, 102, 0.15)"
+  },
+  {
+    "id": "telegram",
+    "name": "Telegram",
+    "url": "https://t.me/gglyon23",
+    "icon": "https://upload.wikimedia.org/wikipedia/commons/8/82/Telegram_logo.svg",
+    "alt": "telegram-logo",
+    "backgroundColor": "rgba(0, 136, 204, 0.15)"
+  },
+  {
+    "id": "facebook",
+    "name": "Facebook",
+    "url": "https://www.facebook.com/share/tnSHU9qJosMEo5zP/?mibextid=LQQJ4d",
+    "icon": "https://upload.wikimedia.org/wikipedia/commons/0/05/Facebook_Logo_%282019%29.png",
+    "alt": "facebook-logo",
+    "backgroundColor": "rgba(24, 119, 242, 0.15)"
+  },
+  {
+    "id": "instagram",
+    "name": "Instagram",
+    "url": "https://www.instagram.com/yn0ht/profilecard/?igsh=Z3I2d2hxdjc3eW5m",
+    "icon": "https://upload.wikimedia.org/wikipedia/commons/e/e7/Instagram_logo_2016.svg",
+    "alt": "instagram-logo",
+    "backgroundColor": "rgba(193, 53, 132, 0.15)"
+  },
+  {
+    "id": "x",
+    "name": "X",
+    "url": "https://x.com/your-x-id",
+    "icon": "https://upload.wikimedia.org/wikipedia/commons/9/9f/X_logo_2023.svg",
+    "alt": "x-twitter-logo",
+    "backgroundColor": "rgba(0, 0, 0, 0.15)"
+  }
+]

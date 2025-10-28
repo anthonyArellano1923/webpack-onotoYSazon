@@ -434,3 +434,7 @@ footer .publicity {
     margin-bottom: 0.4rem;
     font-size: var(--sm-font);
 }
+
+.contact__social-cards{
+  display: flex;
+}

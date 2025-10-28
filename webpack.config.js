@@ -17,7 +17,7 @@ const __dirname = path.dirname(__filename);
 
 export default {
   mode: 'production',
-  entry: path.resolve(__dirname, './src/js/index.js'),
+  entry: path.resolve(__dirname, './src/index.js'),
   output: {
     path: path.resolve(__dirname, 'dist'),
     filename: '[name].[contenthash].js',
