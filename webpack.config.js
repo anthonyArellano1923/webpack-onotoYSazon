@@ -26,7 +26,7 @@ export default {
     assetModuleFilename: 'assets/[name][hash][ext][query]',
     clean: true,
   },
-  devtool: 'source-map',
+  devtool: 'hidden-source-map',
   resolve: {
     extensions: ['.js', '.jsx'],
     alias: {
@@ -94,5 +94,24 @@ export default {
     minimize: true,
     minimizer: [new CssMinimizerPlugin(), new TerserPlugin()],
     runtimeChunk: 'single',
+    splitChunks: {
+      chunks: 'all',
+      cacheGroups: {
+        // React y ReactDOM van solos — se cachean entre deploys
+        react: {
+          test: /[\\/]node_modules[\\/](react|react-dom)[\\/]/,
+          name: 'vendor-react',
+          chunks: 'all',
+          priority: 20,
+        },
+        // Resto de node_modules en un segundo chunk
+        vendors: {
+          test: /[\\/]node_modules[\\/]/,
+          name: 'vendors',
+          chunks: 'all',
+          priority: 10,
+        },
+      },
+    },
   },
 };

@@ -313,6 +313,11 @@ a { color: inherit; text-decoration: none; }
   overflow: hidden;
   border-radius: 0;
 }
+.hero__media-picture {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 .hero__media-img {
   width: 100%;
   height: 100%;
@@ -1217,7 +1222,17 @@ a { color: inherit; text-decoration: none; }
   color: white;
 }
 .contact-card__media { position: absolute; inset: 0; z-index: -1; }
-.contact-card__media img { width: 100%; height: 100%; object-fit: cover; }
+.contact-card__media-picture {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.contact-card__media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
 .contact-card__media::after {
   content: "";
   position: absolute;

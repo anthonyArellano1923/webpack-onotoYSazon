@@ -1,10 +1,12 @@
 /* Sections.jsx — all section components for the Liquid Glass redesign */
 import { useState, useEffect, useRef } from 'react';
-import imgHero from '../assets/images/hero.png';
+import imgHeroMobile from '../assets/images/hero-mobile.webp';
+import imgHeroDesktop from '../assets/images/hero-desktop.webp';
 import imgTraditionBig from '../assets/images/tradition-big.jpeg';
 import imgTraditionHands from '../assets/images/tradition-hands.jpeg';
 import imgTraditionMaking from '../assets/images/tradition-making.jpeg';
-import imgContact from '../assets/images/contact-anthony.png';
+import imgContactMobile from '../assets/images/contact-mobile.webp';
+import imgContactDesktop from '../assets/images/contact-desktop.webp';
 import { placeOrder } from '../services/api';
 import {
   IconSparkle, IconHeart, IconPlus, IconMinus, IconClose, IconArrow,
@@ -89,7 +91,16 @@ function Hero({ onShopClick }) {
   return (
     <section className="hero" id="top" data-screen-label="01 Hero">
       <div className="hero__media" aria-hidden="true">
-        <img src={imgHero} alt="Hallacas venezolanas Onoto y Sazón" className="hero__media-img" />
+        <picture className="hero__media-picture">
+          <source media="(min-width: 720px)" srcSet={imgHeroDesktop} />
+          <img
+            src={imgHeroMobile}
+            alt="Hallacas venezolanas Onoto y Sazón"
+            className="hero__media-img"
+            fetchpriority="high"
+            decoding="sync"
+          />
+        </picture>
       </div>
       <span className="hero__eyebrow">
         <span className="hero__eyebrow-dot" aria-hidden="true"></span>
@@ -560,14 +571,14 @@ function Tradition() {
         <div className="tradition__inner">
           <div className="tradition__media">
             <div className="tradition__photo tradition__photo--big">
-              <img src={imgTraditionBig} alt="Familia venezolana haciendo hallacas" className="tradition__photo-img" />
+              <img src={imgTraditionBig} alt="Familia venezolana haciendo hallacas" className="tradition__photo-img" loading="lazy" decoding="async" />
               <span className="tradition__photo-glass">Armado a mano</span>
             </div>
             <div className="tradition__photo">
-              <img src={imgTraditionHands} alt="Manos armando una hallaca sobre hoja de plátano" className="tradition__photo-img" />
+              <img src={imgTraditionHands} alt="Manos armando una hallaca sobre hoja de plátano" className="tradition__photo-img" loading="lazy" decoding="async" />
             </div>
             <div className="tradition__photo">
-              <img src={imgTraditionMaking} alt="Familia preparando hallacas juntos" className="tradition__photo-img" />
+              <img src={imgTraditionMaking} alt="Familia preparando hallacas juntos" className="tradition__photo-img" loading="lazy" decoding="async" />
             </div>
           </div>
           <div className="tradition__content">
@@ -624,7 +635,10 @@ function Contact() {
         <div className="contact__inner">
           <div className="contact-card">
             <div className="contact-card__media" aria-hidden="true">
-              <img src={imgContact} alt="Anthony Arellano en la cocina preparando hallacas" className="contact-card__media-img" />
+              <picture className="contact-card__media-picture">
+                <source media="(min-width: 720px)" srcSet={imgContactDesktop} />
+                <img src={imgContactMobile} alt="Anthony Arellano en la cocina preparando hallacas" className="contact-card__media-img" loading="lazy" decoding="async" />
+              </picture>
             </div>
             <h3 className="contact-card__name">Anthony Arellano</h3>
             <p className="contact-card__role">Cocinero · Onoto y Sazón</p>
