@@ -1,16 +1,123 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Onoto y Sazón!</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@100;300;400;500;700&family=Quicksand:wght@300..700&display=swap" rel="stylesheet">
-  <!-- <link rel="stylesheet" href="/src/css/style.css"> -->
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="description" content="Hallacas venezolanas hechas a mano con sazón de casa. Pedidos en Santiago de Chile." />
+  <meta name="theme-color" content="#f7f3ec" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#1a140d" media="(prefers-color-scheme: dark)" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:locale" content="es_CL" />
+  <meta property="og:site_name" content="Onoto y Sazón" />
+  <meta property="og:title" content="Onoto y Sazón — Hallacas venezolanas en Santiago" />
+  <meta property="og:description" content="Hallacas hechas a mano con masa de onoto, guiso lento de tres carnes y hoja de plátano. Receta venezolana tradicional. Pedidos para diciembre en Santiago de Chile." />
+  <meta property="og:image" content="https://i.ibb.co/v62n8w2B/b064c458a44e20aeda58f5ae48a2e546.jpg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:url" content="https://anthonyarellano1923.github.io/onotoYSazon/" />
+  <meta property="og:image:alt" content="Hallaca venezolana tradicional — Onoto y Sazón" />
+
+  <!-- Twitter / X Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Onoto y Sazón — Hallacas venezolanas en Santiago" />
+  <meta name="twitter:description" content="Hallacas hechas a mano con masa de onoto, guiso lento de tres carnes y hoja de plátano. Pedidos para diciembre en Santiago de Chile." />
+  <meta name="twitter:image" content="https://i.ibb.co/v62n8w2B/b064c458a44e20aeda58f5ae48a2e546.jpg" />
+
+  <title>Onoto y Sazón — Hallacas con sabor a casa</title>
+  <link rel="canonical" href="https://anthonyarellano1923.github.io/onotoYSazon/" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="favicon.ico" sizes="any" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,300..700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <!-- Structured Data — LocalBusiness + FoodEstablishment -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": ["FoodEstablishment", "LocalBusiness"],
+    "name": "Onoto y Sazón",
+    "description": "Hallacas venezolanas hechas a mano con masa de onoto, guiso lento de tres carnes y hoja de plátano. Receta tradicional venezolana. Pedidos para diciembre en Santiago de Chile.",
+    "image": "https://i.ibb.co/v62n8w2B/b064c458a44e20aeda58f5ae48a2e546.jpg",
+    "url": "https://anthonyarellano1923.github.io/onotoYSazon/",
+    "telephone": "",
+    "address": {
+      "@type": "PostalAddress",
+      "addressLocality": "Providencia",
+      "addressRegion": "Región Metropolitana",
+      "addressCountry": "CL"
+    },
+    "geo": {
+      "@type": "GeoCoordinates",
+      "latitude": -33.4372,
+      "longitude": -70.6506
+    },
+    "servesCuisine": "Venezolana",
+    "priceRange": "$$ (3.500–32.000 CLP)",
+    "openingHours": "Di Diciembre",
+    "hasMap": "https://maps.google.com/?q=Providencia,Santiago,Chile",
+    "sameAs": [
+      "https://www.instagram.com/yn0ht/",
+      "https://www.facebook.com/share/tnSHU9qJosMEo5zP/",
+      "https://t.me/gglyon23"
+    ],
+    "contactPoint": {
+      "@type": "ContactPoint",
+      "contactType": "customer service",
+      "contactOption": "TollFree",
+      "availableLanguage": "Spanish",
+      "url": "https://wa.me/message/T6P5RENJ5MNOO1"
+    },
+    "offers": [
+      {
+        "@type": "Offer",
+        "name": "Una probadita — 1 hallaca",
+        "price": "3500",
+        "priceCurrency": "CLP",
+        "availability": "https://schema.org/InStock"
+      },
+      {
+        "@type": "Offer",
+        "name": "Cena íntima — 4 hallacas",
+        "price": "13000",
+        "priceCurrency": "CLP",
+        "availability": "https://schema.org/InStock"
+      },
+      {
+        "@type": "Offer",
+        "name": "Cena familiar — 10 hallacas",
+        "price": "32000",
+        "priceCurrency": "CLP",
+        "availability": "https://schema.org/InStock"
+      }
+    ]
+  }
+  </script>
+
+  <style>
+    /* Form input — used across modals */
+    .form-input {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: var(--r-md);
+      border: 1px solid var(--line);
+      background: var(--bg-elev);
+      color: var(--fg);
+      font: inherit;
+      font-size: 15px;
+      outline: none;
+      transition: border-color var(--dur-fast), background var(--dur-fast);
+    }
+    .form-input:focus {
+      border-color: var(--onoto-crimson);
+      background: var(--bg);
+    }
+    [data-theme="dark"] .form-input:focus { border-color: var(--onoto-xanthous); }
+    textarea.form-input { resize: vertical; font-family: var(--font-ui); }
+  </style>
 </head>
 <body>
-  <div id="app"></div>
-  <!-- <script src="/src/js/index.js"></script> -->
+  <div id="root"></div>
 </body>
 </html>

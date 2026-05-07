@@ -8,6 +8,7 @@ import MiniCssExtractPlugin from 'mini-css-extract-plugin';
 import CssMinimizerPlugin from 'css-minimizer-webpack-plugin';
 import TerserPlugin from 'terser-webpack-plugin';
 import { CleanWebpackPlugin } from 'clean-webpack-plugin';
+import webpack from 'webpack';
 import CopyWebpackPlugin from 'copy-webpack-plugin';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -17,7 +18,7 @@ const __dirname = path.dirname(__filename);
 
 export default {
   mode: 'production',
-  entry: path.resolve(__dirname, './src/index.js'),
+  entry: path.resolve(__dirname, './src/index.jsx'),
   output: {
     path: path.resolve(__dirname, 'dist'),
     filename: '[name].[contenthash].js',
@@ -27,7 +28,7 @@ export default {
   },
   devtool: 'source-map',
   resolve: {
-    extensions: ['.js'],
+    extensions: ['.js', '.jsx'],
     alias: {
       '@utils': path.resolve(__dirname, 'src/utils'),
       '@templates': path.resolve(__dirname, 'src/templates'),
@@ -39,14 +40,13 @@ export default {
     rules: [
       {
         // Transpilación JS como en el ejemplo
-        test: /\.m?js$/,
+        test: /\.m?jsx?$/,
         exclude: /node_modules/,
         use: 'babel-loader',
       },
       {
-        // CSS/Stylus extraído en archivos separados
-        test: /\.(css|styl)$/i,
-        use: [MiniCssExtractPlugin.loader, 'css-loader', 'stylus-loader'],
+        test: /\.css$/i,
+        use: [MiniCssExtractPlugin.loader, 'css-loader'],
       },
       {
         // Imágenes
@@ -67,6 +67,9 @@ export default {
     ],
   },
   plugins: [
+    new webpack.DefinePlugin({
+      'process.env.API_URL': JSON.stringify(process.env.API_URL || ''),
+    }),
     new HtmlWebpackPlugin({
       inject: true,
       template: path.resolve(__dirname, './public/index.html'),
@@ -78,7 +81,13 @@ export default {
     new CleanWebpackPlugin(),
     // Mantengo tu copia de .nojekyll para GitHub Pages
     new CopyWebpackPlugin({
-      patterns: [{ from: 'public/.nojekyll', to: '.' }],
+      patterns: [
+        { from: 'public/.nojekyll', to: '.' },
+        { from: 'public/robots.txt', to: '.' },
+        { from: 'public/sitemap.xml', to: '.' },
+        { from: 'public/favicon.svg', to: '.' },
+        { from: 'public/favicon.ico', to: '.' },
+      ],
     }),
   ],
   optimization: {

@@ -2,3 +2,10 @@ node_modules/
 dist/
 .DS_Store
 raw-images/
+
+# Backend
+backend/node_modules/
+backend/.env
+backend/*.db
+backend/*.db-wal
+backend/*.db-shm
