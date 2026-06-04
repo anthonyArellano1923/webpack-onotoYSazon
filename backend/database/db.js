@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcrypt');
 
-const DB_PATH = path.join(__dirname, '..', 'onoto.db');
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'onoto.db');
 const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
 
 const db = new Database(DB_PATH);

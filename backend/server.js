@@ -17,8 +17,15 @@ const PORT = process.env.PORT || 4000;
 app.use(helmet());
 
 // CORS: solo permite el origen del frontend
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3006')
+  .split(',')
+  .map(o => o.trim());
+
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3006',
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error('Not allowed by CORS'));
+  },
   methods: ['GET', 'POST', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   optionsSuccessStatus: 200,
