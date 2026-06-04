@@ -5,6 +5,11 @@ raw-images/
 
 # Claude Code internals
 .claude/worktrees/
+.claude/settings.local.json
+
+# Artefactos de herramientas externas
+evaluation.JSON
+.parcel-cache/
 
 # Backend
 backend/node_modules/
