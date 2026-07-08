@@ -28,12 +28,16 @@ api.tudominio.cl  ──────────────►  Render (Backend
 | Servicio | Plan | Costo |
 |---|---|---|
 | Vercel | Free (Hobby) | $0 / mes |
-| Render — Web Service | Free (750 h/mes) | $0 / mes |
+| Render — Web Service | **Starter** (requerido, ver nota) | $7 USD / mes |
 | Render — Persistent Disk | 1 GB | ~$0.25 / mes |
-| Dominio (.cl o .com) | Cloudflare Registrar | ~$10–15 USD / año |
-| **Total inicial** | | **~$3–5 USD / mes** |
+| Dominio `.cl` (nic.cl) o `.com` (Cloudflare) | | ~$10–15 USD / año |
+| **Total inicial** | | **~$8–9 USD / mes** |
 
-> **Nota:** El plan Free de Render hace que el servidor "duerma" si no recibe visitas en 15 minutos. La primera petición tras el sueño tarda ~30 segundos. Si quieres que siempre esté rápido, el plan **Starter de Render cuesta $7 USD/mes** y elimina ese comportamiento.
+> **⚠️ Por qué NO sirve el plan Free de Render:** los discos persistentes **solo están disponibles en instancias de pago** (Starter o superior). Sin disco persistente, el archivo SQLite (`onoto.db`) vive en el sistema de archivos efímero: **cada redeploy o reinicio borra todos los usuarios y pedidos**. Para una app con base de datos SQLite, Starter es el mínimo real.
+>
+> **Beneficio extra del Starter:** el servidor nunca "duerme" (en Free, tras 15 min sin visitas, la primera petición tardaba ~30 s).
+>
+> **Alternativa $0/mes (futuro):** migrar la base de datos a [Turso](https://turso.tech) (SQLite gestionado, plan free generoso) y dejar el backend en Render Free. Requiere cambios de código en `backend/database/db.js` — no lo hagas en este primer deploy; anótalo como mejora posterior.
 
 ---
 
@@ -57,27 +61,43 @@ api.tudominio.cl  ──────────────►  Render (Backend
 
 ## FASE 1 — Comprar el dominio (15 min)
 
-- [ ] Entra a [cloudflare.com/products/registrar](https://www.cloudflare.com/products/registrar/)
-- [ ] Busca el nombre que quieres (ej. `onotosazon.cl`, `onotosazon.com`)
-- [ ] Agrega al carrito y completa el pago (necesitas tarjeta de crédito/débito)
+> **⚠️ Importante:** Cloudflare Registrar **no vende dominios `.cl`**. Elige según la extensión:
+
+**Si quieres `.cl` (ej. `onotosazon.cl`):**
+- [ ] Regístralo en [nic.cl](https://www.nic.cl) — registro oficial chileno (~$10.000 CLP/año)
+- [ ] Luego, en Cloudflare, usa **"Add a site"** para gestionar el DNS del dominio: Cloudflare te dará 2 nameservers que debes configurar en nic.cl (sección "Servidores de nombre" del dominio)
+
+**Si quieres `.com` (ej. `onotosazon.com`):**
+- [ ] Cómpralo directamente en [Cloudflare Registrar](https://www.cloudflare.com/products/registrar/) (precio de costo, sin markup) — el DNS queda en Cloudflare automáticamente
+- [ ] Alternativa: [Namecheap](https://www.namecheap.com)
+
 - [ ] Anota el nombre exacto del dominio que compraste:
   > **Mi dominio:** `_______________________`
-
-> **Alternativas si no quieres Cloudflare:**
-> - [Namecheap](https://www.namecheap.com) — popular y confiable
-> - [nic.cl](https://www.nic.cl) — registro oficial de dominios `.cl` en Chile
 
 ---
 
 ## FASE 2 — Preparar el código (10 min)
 
-> Esta fase la realizan los **agentes frontend y backend**. Tú solo necesitas verificar que los cambios estén en el repositorio.
+- [X] Pedir al **agente frontend** que ejecute `01_modificaciones_frontend.md` ✓ (aplicado y verificado)
+- [X] Pedir al **agente backend** que ejecute `02_modificaciones_backend.md` ✓ (aplicado y verificado)
 
-- [ ] Pedir al **agente frontend** que ejecute `01_modificaciones_frontend.md`
-- [ ] Pedir al **agente backend** que ejecute `02_modificaciones_backend.md`
-- [ ] Verificar que los cambios aparecen en GitHub (rama `main`):
-  - Abre tu repositorio en GitHub
-  - Confirma que los archivos modificados están actualizados
+### 2.1 — Subir el código a GitHub ⚠️ PASO CRÍTICO PENDIENTE
+
+> **Estado actual (verificado 2026-07-07):** todo el trabajo (backend completo + cambios de deploy) vive en la rama local `redesign_agents`, **11 commits por delante de `main`**. En GitHub, `main` ni siquiera tiene la carpeta `backend/`. Render y Vercel despliegan desde GitHub — sin este paso, nada de lo anterior sirve.
+
+- [ ] Fusionar `redesign_agents` en `main` y subir:
+  ```bash
+  git checkout main
+  git merge redesign_agents
+  git push origin main
+  ```
+- [ ] Verificar en GitHub que `main` ahora contiene:
+  - La carpeta `backend/` (con `server.js`, `controllers/`, etc.)
+  - El archivo `vercel.json` en la raíz
+  - La carpeta `deploy_plan/`
+- [ ] Confirmar que `backend/.env` y `backend/onoto.db` **NO** aparecen en GitHub (están en `.gitignore` — contienen secretos y datos locales)
+
+> **Nota:** el repositorio en GitHub se llama **`webpack-onotoYSazon`** (no `onotoYSazon`). Usa ese nombre cuando Render y Vercel te pidan elegir el repo. Si quieres renombrarlo a `onotoYSazon`, hazlo en GitHub → Settings → Rename **antes** de conectar Render/Vercel; GitHub redirige el nombre viejo, pero es más limpio conectar los servicios con el nombre definitivo.
 
 ---
 
@@ -87,7 +107,7 @@ api.tudominio.cl  ──────────────►  Render (Backend
 
 - [ ] Entra a [dashboard.render.com](https://dashboard.render.com)
 - [ ] Clic en **"New +"** → **"Web Service"**
-- [ ] Conecta tu repositorio de GitHub (elige `onotoYSazon`)
+- [ ] Conecta tu repositorio de GitHub (elige `webpack-onotoYSazon`)
 - [ ] Configura el servicio:
 
   | Campo | Valor |
@@ -97,7 +117,7 @@ api.tudominio.cl  ──────────────►  Render (Backend
   | **Runtime** | `Node` |
   | **Build Command** | `npm install` |
   | **Start Command** | `npm start` |
-  | **Instance Type** | Free (o Starter si quieres sin sleep) |
+  | **Instance Type** | **Starter ($7/mes)** — obligatorio: el plan Free no permite discos persistentes y sin disco la base de datos se borra en cada deploy |
 
 - [ ] Clic en **"Create Web Service"**
 - [ ] Espera que aparezca `Deploy live ✓` (puede tardar 3–5 min)
@@ -126,7 +146,6 @@ api.tudominio.cl  ──────────────►  Render (Backend
   | Key | Value |
   |---|---|
   | `NODE_ENV` | `production` |
-  | `PORT` | `10000` |
   | `JWT_SECRET` | *(ver instrucción abajo para generar)* |
   | `JWT_EXPIRES_IN` | `7d` |
   | `CORS_ORIGIN` | `https://www.tudominio.cl,https://tudominio.cl` *(pon tu dominio real)* |
@@ -141,12 +160,15 @@ api.tudominio.cl  ──────────────►  Render (Backend
   ```
   Copia el resultado y pégalo como valor de `JWT_SECRET`.
 
+  > No configures `PORT`: Render la inyecta automáticamente y el servidor ya la lee con `process.env.PORT`.
+
 - [ ] Clic en **"Save Changes"** — Render volverá a deployar
 
 ### 3.4 — Verificar que el backend funciona
 
 - [ ] Abre en el navegador: `https://TU-URL.onrender.com/health`
 - [ ] Debes ver: `{"status":"ok"}`
+- [ ] En Render → **Logs**, verifica que no hay errores y que aparece el mensaje de arranque del servidor. En el primer arranque, el backend crea las tablas (desde `schema.sql`) y siembra el usuario admin con `ADMIN_EMAIL` / `ADMIN_PASSWORD` — si cambiaste esas variables después, el admin ya existente NO se actualiza.
 
 ---
 
@@ -205,11 +227,13 @@ api.tudominio.cl  ──────────────►  Render (Backend
 
   | Tipo | Nombre | Contenido | Proxy |
   |---|---|---|---|
-  | `CNAME` | `www` | *(el valor que dio Vercel)* | Activado (nube naranja) |
-  | `CNAME` | `@` | *(el valor de redirección de Vercel)* | Activado |
+  | `CNAME` | `www` | *(el valor que dio Vercel, normalmente `cname.vercel-dns.com`)* | **Desactivado** (nube gris) |
+  | `A` | `@` | `76.76.21.21` *(o el valor que indique Vercel para el apex)* | **Desactivado** (nube gris) |
   | `CNAME` | `api` | *(el valor que dio Render)* | **Desactivado** (nube gris) |
 
-  > **Importante:** El registro `api` DEBE estar con el proxy desactivado (nube gris), de lo contrario Render no puede verificar el dominio.
+  > **Importante:** Deja los TRES registros con el proxy **desactivado** (nube gris / "DNS only"):
+  > - `api`: si está proxied, Render no puede verificar el dominio ni emitir el certificado SSL.
+  > - `www` y `@`: Vercel ya incluye CDN y SSL propios; el proxy de Cloudflare encima puede causar bucles de redirección o errores de certificado. Si más adelante quieres activarlo, primero cambia en Cloudflare → SSL/TLS el modo a **Full (strict)** — nunca "Flexible".
 
 - [ ] Guarda los cambios
 
@@ -234,7 +258,16 @@ api.tudominio.cl  ──────────────►  Render (Backend
 - [ ] Prueba **agregar hallacas al carrito y confirmar un pedido**
 - [ ] Prueba el **modo oscuro**
 - [ ] Abre `https://api.tudominio.cl/health` — debe responder `{"status":"ok"}`
+- [ ] Prueba **iniciar sesión como admin** (con `ADMIN_EMAIL` / `ADMIN_PASSWORD` configurados en Render)
 - [ ] Verifica que el **candado SSL** (HTTPS) aparece en el navegador en ambas URLs
+
+---
+
+## FASE 7 — Después del deploy (mantenimiento mínimo)
+
+- [ ] **Respaldo de la base de datos:** el archivo `/data/onoto.db` contiene todos los usuarios y pedidos. Render ofrece *snapshots* diarios del disco (retención ~7 días) en Settings → Disks. Además, una vez al mes descarga una copia manual: en Render → tu servicio → **Shell**, o configura un endpoint/cron más adelante.
+- [ ] **Monitoreo gratis:** crea una cuenta en [UptimeRobot](https://uptimerobot.com) y agrega un monitor HTTP a `https://api.tudominio.cl/health` — te avisa por email si el backend se cae.
+- [ ] **Mejora futura (opcional, $0/mes):** migrar la DB a Turso y bajar Render a Free — anotado en la sección de costos.
 
 ---
 
@@ -244,6 +277,8 @@ api.tudominio.cl  ──────────────►  Render (Backend
 |---|---|---|
 | La web carga pero las peticiones al backend fallan (CORS) | `CORS_ORIGIN` no incluye tu dominio | Verifica que `CORS_ORIGIN` en Render tenga exactamente `https://www.tudominio.cl,https://tudominio.cl` |
 | El backend responde pero la DB da error | Disco no montado en `/data` | Verifica que el disco está montado en Render y que `DB_PATH=/data/onoto.db` |
-| Primera petición tarda 30 segundos | Render Free en modo "sleep" | Normal en free tier — considera upgrade a Starter ($7/mes) |
+| Los datos (usuarios/pedidos) desaparecen tras un deploy | La app está escribiendo fuera del disco persistente | Verifica que `DB_PATH=/data/onoto.db` está configurado y el disco montado en `/data` |
+| Render no permite agregar el disco | Instancia en plan Free | Los discos requieren instancia Starter o superior — cambia el Instance Type |
+| Vercel/Render dan error de SSL o bucle de redirección | Proxy de Cloudflare activado (nube naranja) | Pon los registros DNS en "DNS only" (nube gris) |
 | Dominio no resuelve | DNS propagándose | Espera hasta 24 horas (normalmente 5–30 min) |
 | Vercel falla en build | Error en el código | Revisa los logs en Vercel → Deployments → clic en el deployment fallido |
