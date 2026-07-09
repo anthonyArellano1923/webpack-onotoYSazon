@@ -6,6 +6,7 @@ const bcrypt = require('bcrypt');
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'onoto.db');
 const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
 
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new Database(DB_PATH);
 
 // Estas pragmas deben aplicarse en cada conexión
