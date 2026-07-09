@@ -11,11 +11,11 @@
 Usuario
    │
    ▼
-www.tudominio.cl  ──────────────►  Vercel (Frontend React)
+www.onotoysazon.cl  ──────────────►  Vercel (Frontend React)
                                         │
                                         │ fetch a la API
                                         ▼
-api.tudominio.cl  ──────────────►  Render (Backend Express + SQLite)
+api.onotoysazon.cl  ──────────────►  Render (Backend Express + SQLite)
                                         │
                                         ▼
                                    /data/onoto.db  (disco persistente)
@@ -71,8 +71,8 @@ api.tudominio.cl  ──────────────►  Render (Backend
 - [ ] Cómpralo directamente en [Cloudflare Registrar](https://www.cloudflare.com/products/registrar/) (precio de costo, sin markup) — el DNS queda en Cloudflare automáticamente
 - [ ] Alternativa: [Namecheap](https://www.namecheap.com)
 
-- [ ] Anota el nombre exacto del dominio que compraste:
-  > **Mi dominio:** `_______________________`
+- [X] Anota el nombre exacto del dominio que compraste:
+  > **Mi dominio:** `onotoysazon.cl`
 
 ---
 
@@ -148,7 +148,7 @@ api.tudominio.cl  ──────────────►  Render (Backend
   | `NODE_ENV` | `production` |
   | `JWT_SECRET` | *(ver instrucción abajo para generar)* |
   | `JWT_EXPIRES_IN` | `7d` |
-  | `CORS_ORIGIN` | `https://www.tudominio.cl,https://tudominio.cl` *(pon tu dominio real)* |
+  | `CORS_ORIGIN` | `https://www.onotoysazon.cl,https://onotoysazon.cl` *(pon tu dominio real)* |
   | `ADMIN_EMAIL` | `tu@email.com` |
   | `ADMIN_PASSWORD` | *(una contraseña segura que no olvides)* |
   | `ADMIN_NAME` | `Admin` |
@@ -209,14 +209,14 @@ api.tudominio.cl  ──────────────►  Render (Backend
 ### 5.1 — Apuntar el dominio al frontend (Vercel)
 
 - [ ] En Vercel → tu proyecto → **Settings** → **Domains**
-- [ ] Clic en **"Add"** y escribe `www.tudominio.cl`
+- [ ] Clic en **"Add"** y escribe `www.onotoysazon.cl`
 - [ ] Vercel te dará un registro DNS para agregar. Anótalo.
-- [ ] También agrega `tudominio.cl` (sin www) — Vercel lo redirigirá al www
+- [ ] También agrega `onotoysazon.cl` (sin www) — Vercel lo redirigirá al www
 
 ### 5.2 — Crear subdominio para el backend (Render)
 
 - [ ] En Render → tu servicio → **Settings** → **Custom Domains**
-- [ ] Clic en **"Add Custom Domain"** y escribe `api.tudominio.cl`
+- [ ] Clic en **"Add Custom Domain"** y escribe `api.onotoysazon.cl`
 - [ ] Render te dará un valor CNAME para agregar. Anótalo.
 
 ### 5.3 — Configurar DNS en Cloudflare
@@ -245,19 +245,19 @@ api.tudominio.cl  ──────────────►  Render (Backend
 ### 5.5 — Actualizar la URL de la API en Vercel
 
 - [ ] En Vercel → tu proyecto → **Settings** → **Environment Variables**
-- [ ] Edita `API_URL` y cambia el valor a `https://api.tudominio.cl`
+- [ ] Edita `API_URL` y cambia el valor a `https://api.onotoysazon.cl`
 - [ ] Vercel redesplegará automáticamente
 
 ---
 
 ## FASE 6 — Prueba final (10 min)
 
-- [ ] Abre `https://www.tudominio.cl` — debe cargar la web
+- [ ] Abre `https://www.onotoysazon.cl` — debe cargar la web
 - [ ] Prueba **registrar una cuenta nueva**
 - [ ] Prueba **iniciar sesión**
 - [ ] Prueba **agregar hallacas al carrito y confirmar un pedido**
 - [ ] Prueba el **modo oscuro**
-- [ ] Abre `https://api.tudominio.cl/health` — debe responder `{"status":"ok"}`
+- [ ] Abre `https://api.onotoysazon.cl/health` — debe responder `{"status":"ok"}`
 - [ ] Prueba **iniciar sesión como admin** (con `ADMIN_EMAIL` / `ADMIN_PASSWORD` configurados en Render)
 - [ ] Verifica que el **candado SSL** (HTTPS) aparece en el navegador en ambas URLs
 
@@ -266,7 +266,7 @@ api.tudominio.cl  ──────────────►  Render (Backend
 ## FASE 7 — Después del deploy (mantenimiento mínimo)
 
 - [ ] **Respaldo de la base de datos:** el archivo `/data/onoto.db` contiene todos los usuarios y pedidos. Render ofrece *snapshots* diarios del disco (retención ~7 días) en Settings → Disks. Además, una vez al mes descarga una copia manual: en Render → tu servicio → **Shell**, o configura un endpoint/cron más adelante.
-- [ ] **Monitoreo gratis:** crea una cuenta en [UptimeRobot](https://uptimerobot.com) y agrega un monitor HTTP a `https://api.tudominio.cl/health` — te avisa por email si el backend se cae.
+- [ ] **Monitoreo gratis:** crea una cuenta en [UptimeRobot](https://uptimerobot.com) y agrega un monitor HTTP a `https://api.onotoysazon.cl/health` — te avisa por email si el backend se cae.
 - [ ] **Mejora futura (opcional, $0/mes):** migrar la DB a Turso y bajar Render a Free — anotado en la sección de costos.
 
 ---
@@ -275,7 +275,7 @@ api.tudominio.cl  ──────────────►  Render (Backend
 
 | Problema | Causa probable | Solución |
 |---|---|---|
-| La web carga pero las peticiones al backend fallan (CORS) | `CORS_ORIGIN` no incluye tu dominio | Verifica que `CORS_ORIGIN` en Render tenga exactamente `https://www.tudominio.cl,https://tudominio.cl` |
+| La web carga pero las peticiones al backend fallan (CORS) | `CORS_ORIGIN` no incluye tu dominio | Verifica que `CORS_ORIGIN` en Render tenga exactamente `https://www.onotoysazon.cl,https://onotoysazon.cl` |
 | El backend responde pero la DB da error | Disco no montado en `/data` | Verifica que el disco está montado en Render y que `DB_PATH=/data/onoto.db` |
 | Los datos (usuarios/pedidos) desaparecen tras un deploy | La app está escribiendo fuera del disco persistente | Verifica que `DB_PATH=/data/onoto.db` está configurado y el disco montado en `/data` |
 | Render no permite agregar el disco | Instancia en plan Free | Los discos requieren instancia Starter o superior — cambia el Instance Type |
