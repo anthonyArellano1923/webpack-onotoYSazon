@@ -54,7 +54,7 @@ api.onotoysazon.cl  ──────────────►  Render (Backe
 - [ ] **Render** — [render.com](https://render.com)
   > Usa la opción "Connect GitHub" al registrarte.
 
-- [ ] **Cloudflare** (para el dominio) — [cloudflare.com](https://cloudflare.com)
+- [X] **Cloudflare** (para el dominio) — [cloudflare.com](https://cloudflare.com)
   > Crea una cuenta. Cloudflare ofrece dominios al precio de costo (sin markup).
 
 ---
@@ -64,8 +64,8 @@ api.onotoysazon.cl  ──────────────►  Render (Backe
 > **⚠️ Importante:** Cloudflare Registrar **no vende dominios `.cl`**. Elige según la extensión:
 
 **Si quieres `.cl` (ej. `onotosazon.cl`):**
-- [ ] Regístralo en [nic.cl](https://www.nic.cl) — registro oficial chileno (~$10.000 CLP/año)
-- [ ] Luego, en Cloudflare, usa **"Add a site"** para gestionar el DNS del dominio: Cloudflare te dará 2 nameservers que debes configurar en nic.cl (sección "Servidores de nombre" del dominio)
+- [X] Regístralo en [nic.cl](https://www.nic.cl) — registro oficial chileno (~$10.000 CLP/año)
+- [X] Luego, en Cloudflare, usa **"Add a site"** para gestionar el DNS del dominio: Cloudflare te dará 2 nameservers que debes configurar en nic.cl (sección "Servidores de nombre" del dominio) — verificado por whois: `kianchau.ns.cloudflare.com` / `sonia.ns.cloudflare.com` guardados en nic.cl, propagación DNS en curso
 
 **Si quieres `.com` (ej. `onotosazon.com`):**
 - [ ] Cómpralo directamente en [Cloudflare Registrar](https://www.cloudflare.com/products/registrar/) (precio de costo, sin markup) — el DNS queda en Cloudflare automáticamente
@@ -85,17 +85,17 @@ api.onotoysazon.cl  ──────────────►  Render (Backe
 
 > **Estado actual (verificado 2026-07-07):** todo el trabajo (backend completo + cambios de deploy) vive en la rama local `redesign_agents`, **11 commits por delante de `main`**. En GitHub, `main` ni siquiera tiene la carpeta `backend/`. Render y Vercel despliegan desde GitHub — sin este paso, nada de lo anterior sirve.
 
-- [ ] Fusionar `redesign_agents` en `main` y subir:
+- [X] Fusionar `redesign_agents` en `main` y subir:
   ```bash
   git checkout main
   git merge redesign_agents
   git push origin main
   ```
-- [ ] Verificar en GitHub que `main` ahora contiene:
+- [X] Verificar en GitHub que `main` ahora contiene:
   - La carpeta `backend/` (con `server.js`, `controllers/`, etc.)
   - El archivo `vercel.json` en la raíz
   - La carpeta `deploy_plan/`
-- [ ] Confirmar que `backend/.env` y `backend/onoto.db` **NO** aparecen en GitHub (están en `.gitignore` — contienen secretos y datos locales)
+- [X] Confirmar que `backend/.env` y `backend/onoto.db` **NO** aparecen en GitHub (están en `.gitignore` — contienen secretos y datos locales)
 
 > **Nota:** el repositorio en GitHub se llama **`webpack-onotoYSazon`** (no `onotoYSazon`). Usa ese nombre cuando Render y Vercel te pidan elegir el repo. Si quieres renombrarlo a `onotoYSazon`, hazlo en GitHub → Settings → Rename **antes** de conectar Render/Vercel; GitHub redirige el nombre viejo, pero es más limpio conectar los servicios con el nombre definitivo.
 
