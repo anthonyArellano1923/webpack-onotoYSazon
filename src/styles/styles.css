@@ -369,12 +369,17 @@ a { color: inherit; text-decoration: none; }
   color: white;
   margin: 0 0 16px;
   text-wrap: balance;
+  /* Separa el texto del fondo fotográfico (evita que se pierda sobre zonas claras) */
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.38);
 }
 .hero__title-em {
   font-style: italic;
   font-weight: 300;
   color: var(--onoto-xanthous);
   display: inline-block;
+  /* El dorado ("a mano") tiende a fundirse con la hallaca amarilla del fondo:
+     una sombra más marcada le da contraste suficiente */
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.6), 0 0 2px rgba(0, 0, 0, 0.45);
 }
 .hero__subtitle {
   font-size: 17px;
@@ -885,6 +890,28 @@ a { color: inherit; text-decoration: none; }
 }
 [data-theme="dark"] .modal__handle { background: rgba(255,255,255,0.25); }
 @media (min-width: 720px) { .modal__handle { display: none; } }
+
+/* Tabs del modal de autenticación (Iniciar sesión / Crear cuenta).
+   El padding superior los despega del borde redondeado y el derecho evita
+   que choquen con el botón de cerrar (.modal__close, top/right: 16px, 36px). */
+.auth-modal__tabs {
+  display: flex;
+  gap: 8px;
+  padding: 24px 64px 0 24px;
+}
+.auth-modal__tab {
+  padding: 8px 14px;
+  border-radius: var(--r-md);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-subtle);
+  background: transparent;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.auth-modal__tab--active {
+  color: var(--fg);
+  background: var(--surface-tint);
+}
 
 .modal__hero {
   position: relative;

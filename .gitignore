@@ -22,3 +22,4 @@ backend/*.db-shm
 # Plan de deploy (checklist personal, cambia constantemente)
 deploy_plan/00_plan_de_deploy.md
 deploy_plan/GUIA_QUE_HICE.md
+deploy_plan/03_mejoras_ux_pedidos_admin.md
