@@ -8,8 +8,20 @@
  * @module data/socials
  */
 
-/** URL del link de WhatsApp con código de mensaje pre-configurado. */
+/**
+ * URL corta de WhatsApp con código de mensaje pre-configurado. Úsala SOLO
+ * para botones genéricos (FAB flotante, sección Contacto): este formato
+ * `wa.me/message/...` ignora el parámetro `?text=`, así que sirve para abrir
+ * un chat pero no para prellenar un mensaje.
+ */
 export const WHATSAPP_URL = 'https://wa.me/message/T6P5RENJ5MNOO1';
+
+/**
+ * Número real de WhatsApp (`+56 9 2018 4981`) sin símbolos, para enlaces
+ * `https://wa.me/<WHATSAPP_PHONE>?text=<mensaje>`. Úsalo para el pedido del
+ * carrito, donde sí necesitamos prellenar el mensaje con el detalle de la compra.
+ */
+export const WHATSAPP_PHONE = '56920184981';
 
 const socials = [
   {

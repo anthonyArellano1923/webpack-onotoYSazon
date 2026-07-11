@@ -1,8 +1,16 @@
 const { db } = require('../database/db');
+const { normalizePhone } = require('../utils/phone');
 
 function createOrder(req, res) {
-  const { items, delivery, dateHint, notes, total } = req.body;
-  const userId = req.user.id;
+  const { name, phone, items, delivery, address, dateHint, notes, total, quantityHallacas } = req.body;
+  // Checkout sin login: si hay sesión (optionalAuth) el pedido queda asociado,
+  // si no, queda anónimo pero igual persistido con customer_name/customer_phone.
+  const userId = req.user?.id ?? null;
+  const customerPhone = normalizePhone(phone);
+
+  if (!name?.trim() || !customerPhone) {
+    return res.status(400).json({ error: 'Nombre y teléfono son requeridos.' });
+  }
 
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'Debes incluir al menos un producto.' });
@@ -17,17 +25,24 @@ function createOrder(req, res) {
 
   const hasConsulta = items.some((it) => it.priceAtTime == null);
   const totalClp = hasConsulta ? null : (typeof total === 'number' ? total : null);
+  // Sin tabla `packs` en el backend todavía, confiamos en el total de hallacas
+  // que calculó el frontend (misma confianza que ya se le da a `total`).
+  const qtyHallacas = Number.isInteger(quantityHallacas) ? quantityHallacas : 0;
 
   const insertOrder = db.transaction(() => {
     const orderResult = db.prepare(`
-      INSERT INTO orders (user_id, delivery, date_hint, notes, total_clp)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO orders (user_id, customer_name, customer_phone, delivery, address, date_hint, notes, total_clp, quantity_hallacas, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'web')
     `).run(
       userId,
+      name.trim(),
+      customerPhone,
       delivery || 'retiro',
+      delivery === 'despacho' ? (address?.trim() || null) : null,
       dateHint?.trim() || null,
       notes?.trim() || null,
-      totalClp
+      totalClp,
+      qtyHallacas
     );
 
     const orderId = orderResult.lastInsertRowid;

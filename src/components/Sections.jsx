@@ -14,7 +14,10 @@ import {
   IconPhone, IconMapPin, IconClock, IconInstagram, IconFacebook,
   IconXLogo, IconTelegram, IconMap,
 } from './Icons';
-import socials, { WHATSAPP_URL } from '../data/socials';
+import socials, { WHATSAPP_URL, WHATSAPP_PHONE } from '../data/socials';
+import { normalizePhone, phoneToDigits } from '../utils/phone';
+import SANTIAGO_COMUNAS from '../data/comunas';
+import OrderTransition from './OrderTransition';
 
 const formatCLP = (n) => {
   if (n == null) return "—";
@@ -177,13 +180,15 @@ function MenuCard({ pack, onOpen, onAdd, isFav, onToggleFav }) {
             <div className="menu-card__price">
               {pack.price ? formatCLP(pack.price) : "Consulta"}
             </div>
+            {pack.price != null &&
             <button
               className="menu-card__add"
               onClick={handleAdd}
               aria-label={`Añadir ${pack.name} al carrito`}>
-              
-              <IconPlus size={20} />
-            </button>
+
+                <IconPlus size={20} />
+              </button>
+            }
           </div>
         </div>
       </div>
@@ -223,9 +228,31 @@ function MenuSection({ packs, onOpenPack, onAddToCart, favs, onToggleFav }) {
 }
 
 /* ---------- Pack Detail Modal ---------- */
-function PackModal({ pack, onClose, onAdd }) {
+function PackModal({ pack, user, onClose, onAdd, onOpenAuth }) {
   const [qty, setQty] = useState(1);
-  useEffect(() => {setQty(1);}, [pack?.id]);
+  const [customQty, setCustomQty] = useState('');
+  const [name, setName] = useState(user?.name || '');
+  const [phone, setPhone] = useState(user?.phone ? phoneToDigits(user.phone) : '');
+  const [delivery, setDelivery] = useState('retiro');
+  const [street, setStreet] = useState('');
+  const [streetNumber, setStreetNumber] = useState('');
+  const [comuna, setComuna] = useState('');
+  const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(null);
+
+  useEffect(() => {
+    setQty(1);
+    setCustomQty('');
+    setName(user?.name || '');
+    setPhone(user?.phone ? phoneToDigits(user.phone) : '');
+    setDelivery('retiro');
+    setStreet('');
+    setStreetNumber('');
+    setComuna('');
+    setNotes('');
+    setSubmitting(null);
+  }, [pack?.id]);
+
   if (!pack) return null;
 
   const isCustom = pack.price == null;
@@ -234,6 +261,65 @@ function PackModal({ pack, onClose, onAdd }) {
   const dec = () => setQty((q) => Math.max(1, q - 1));
   const inc = () => setQty((q) => Math.min(99, q + 1));
   const add = () => {onAdd(pack, qty);onClose();};
+
+  // --- Pedido grande a medida (packs "por encargo", sin precio fijo) ---
+  const normalizedPhone = normalizePhone(phone);
+  const matchedComuna = SANTIAGO_COMUNAS.find((c) => c.toLowerCase() === comuna.trim().toLowerCase());
+  const addressComplete = delivery !== 'despacho' || (street.trim() && streetNumber.trim() && matchedComuna);
+  const customQtyNum = parseInt(customQty, 10);
+  const customQtyValid = Number.isInteger(customQtyNum) && customQtyNum > 0;
+  const canSubmitCustom = customQtyValid && name.trim() && normalizedPhone && addressComplete;
+  const customAddress = delivery === 'despacho' && addressComplete
+    ? `${street.trim()} ${streetNumber.trim()}, ${matchedComuna}`
+    : null;
+
+  const buildCustomMessage = () => {
+    const lines = [
+      `¡Hola! Soy ${name.trim()}, quiero hacer un pedido grande en Onoto y Sazón:`,
+      '',
+      `• ${customQtyNum} hallacas (cantidad, precio y fecha a coordinar)`,
+      '',
+      `Modalidad: ${delivery === 'retiro' ? 'Retiro' : 'Despacho a domicilio'}`,
+      customAddress ? `Dirección: ${customAddress}` : null,
+      `Teléfono: ${normalizedPhone}`,
+      notes.trim() ? `Notas: ${notes.trim()}` : null,
+    ].filter(Boolean);
+    return lines.join('\n');
+  };
+
+  function handleCustomSubmit() {
+    if (!canSubmitCustom) return;
+    const waUrl = `https://wa.me/${WHATSAPP_PHONE}?text=${encodeURIComponent(buildCustomMessage())}`;
+    // Misma estrategia que el carrito: abrir la pestaña en el clic (sin
+    // noopener, para conservar la referencia) y navegarla cuando esté listo.
+    const waTab = window.open('', '_blank');
+    if (waTab) {
+      try { waTab.opener = null; } catch { /* no crítico */ }
+    }
+    const placeOrderPromise = placeOrder({
+      name: name.trim(),
+      phone: normalizedPhone,
+      items: [{ packId: pack.id, packName: pack.name, qty: 1, priceAtTime: null }],
+      delivery,
+      address: customAddress,
+      notes: notes.trim() || null,
+      total: null,
+      quantityHallacas: customQtyNum,
+    });
+    setSubmitting({ waTab, waUrl, placeOrderPromise });
+  }
+
+  if (submitting) {
+    return (
+      <OrderTransition
+        waTab={submitting.waTab}
+        waUrl={submitting.waUrl}
+        placeOrderPromise={submitting.placeOrderPromise}
+        onClose={onClose}
+        onOpenAuth={() => { onClose?.(); onOpenAuth?.(); }}
+      />);
+
+  }
 
   return (
     <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="pack-modal-title">
@@ -271,7 +357,7 @@ function PackModal({ pack, onClose, onAdd }) {
               )}
             </div>
           </div>
-          {!isCustom &&
+          {!isCustom ?
           <div className="qty">
               <span className="qty__label">Cantidad de packs</span>
               <div className="qty__controls">
@@ -283,6 +369,76 @@ function PackModal({ pack, onClose, onAdd }) {
                   <IconPlus size={14} />
                 </button>
               </div>
+            </div> :
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 4 }}>
+              <Field label="Cantidad de hallacas" id="custom-qty">
+                <input
+                  id="custom-qty"
+                  className="form-input"
+                  type="number"
+                  min="1"
+                  step="1"
+                  inputMode="numeric"
+                  value={customQty}
+                  onChange={(e) => setCustomQty(e.target.value)}
+                  placeholder="Ej: 25" />
+
+              </Field>
+              <Field label="Nombre" id="custom-name">
+                <input id="custom-name" className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="¿Cómo te llamas?" />
+              </Field>
+              <Field label="Teléfono" id="custom-phone">
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 14, color: "var(--fg-muted)" }}>+56</span>
+                  <input
+                    id="custom-phone"
+                    className="form-input"
+                    type="tel"
+                    inputMode="numeric"
+                    value={phone}
+                    onChange={(e) => setPhone(phoneToDigits(e.target.value).slice(0, 9))}
+                    placeholder="9 dígitos"
+                    maxLength={9}
+                    aria-invalid={phone.length === 9 && !normalizedPhone} />
+
+                </div>
+                {phone.length === 9 && !normalizedPhone &&
+              <p role="alert" style={{ margin: "6px 0 0", fontSize: 12.5, color: "var(--onoto-crimson, #880D1E)" }}>
+                    Número inválido: los celulares chilenos empiezan con 9 (ej. 912345678).
+                  </p>
+              }
+              </Field>
+              <Field label="Modalidad">
+                <div style={{ display: "flex", gap: 8 }}>
+                  {[
+                { v: "retiro", l: "Retiro" },
+                { v: "despacho", l: "Despacho" }].
+                map((o) =>
+                <button
+                  key={o.v}
+                  type="button"
+                  className={`btn ${delivery === o.v ? "btn--primary" : "btn--glass"}`}
+                  style={{ flex: 1, minHeight: 44, fontSize: 14 }}
+                  onClick={() => setDelivery(o.v)}
+                  aria-pressed={delivery === o.v}>
+
+                      {o.l}
+                    </button>
+                )}
+                </div>
+              </Field>
+              {delivery === 'despacho' &&
+            <AddressFields
+              idPrefix="custom"
+              street={street} setStreet={setStreet}
+              streetNumber={streetNumber} setStreetNumber={setStreetNumber}
+              comuna={comuna} setComuna={setComuna}
+              matchedComuna={matchedComuna} />
+            }
+              <Field label="Notas (opcional)" id="custom-notes">
+                <textarea id="custom-notes" className="form-input" rows="2" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Fecha, ocasión, preferencias..." />
+              </Field>
             </div>
           }
         </div>
@@ -298,16 +454,14 @@ function PackModal({ pack, onClose, onAdd }) {
               </button>
             </> :
 
-          <a
+          <button
             className="btn btn--primary modal__cta"
-            style={{ flex: 1 }}
-            href={`${WHATSAPP_URL}?text=${encodeURIComponent("Hola Anthony, me interesa el pack +15 hallacas para coordinar.")}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={onClose}>
-            
-              <IconWhatsapp size={18} /> Hablar por WhatsApp
-            </a>
+            onClick={handleCustomSubmit}
+            disabled={!canSubmitCustom}
+            style={{ opacity: canSubmitCustom ? 1 : 0.5 }}>
+
+              <IconWhatsapp size={16} /> Pedir
+            </button>
           }
         </div>
       </div>
@@ -315,12 +469,137 @@ function PackModal({ pack, onClose, onAdd }) {
 
 }
 
+/* ---------- Address Fields (despacho) ---------- */
+function AddressFields({ idPrefix, street, setStreet, streetNumber, setStreetNumber, comuna, setComuna, matchedComuna }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <p style={{ margin: 0, fontSize: 12.5, color: "var(--fg-muted)" }}>
+        Por ahora despachamos dentro de todo Santiago (Gran Santiago).
+      </p>
+      <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ flex: 2 }}>
+          <Field label="Calle" id={`${idPrefix}-street`}>
+            <input id={`${idPrefix}-street`} className="form-input" value={street} onChange={(e) => setStreet(e.target.value)} placeholder="Nombre de la calle" />
+          </Field>
+        </div>
+        <div style={{ flex: 1 }}>
+          <Field label="Número" id={`${idPrefix}-street-number`}>
+            <input id={`${idPrefix}-street-number`} className="form-input" value={streetNumber} onChange={(e) => setStreetNumber(e.target.value)} placeholder="1234" />
+          </Field>
+        </div>
+      </div>
+      <Field label="Comuna" id={`${idPrefix}-comuna`}>
+        <input
+          id={`${idPrefix}-comuna`}
+          className="form-input"
+          list={`${idPrefix}-comuna-options`}
+          value={comuna}
+          onChange={(e) => setComuna(e.target.value)}
+          placeholder="Escribe para buscar tu comuna..."
+          autoComplete="off"
+          aria-invalid={comuna.trim().length > 0 && !matchedComuna}
+        />
+        <datalist id={`${idPrefix}-comuna-options`}>
+          {SANTIAGO_COMUNAS.map((c) => <option key={c} value={c} />)}
+        </datalist>
+      </Field>
+      {comuna.trim().length > 0 && !matchedComuna &&
+      <p role="alert" style={{ margin: "-8px 0 0", fontSize: 12.5, color: "var(--onoto-crimson, #880D1E)" }}>
+          No despachamos ahí todavía. Elige una comuna de la lista.
+        </p>
+      }
+    </div>);
+
+}
+
 /* ---------- Cart Modal ---------- */
-function CartModal({ items, packs, onClose, onChangeQty, onRemove, onCheckout }) {
+function CartModal({ items, packs, user, onClose, onChangeQty, onRemove, onOrderSuccess, onOpenAuth }) {
+  const [name, setName] = useState(user?.name || '');
+  const [phone, setPhone] = useState(user?.phone ? phoneToDigits(user.phone) : '');
+  const [delivery, setDelivery] = useState('retiro');
+  const [street, setStreet] = useState('');
+  const [streetNumber, setStreetNumber] = useState('');
+  const [comuna, setComuna] = useState('');
+  const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(null);
+
   const total = items.reduce((s, it) => {
     const p = packs.find((x) => x.id === it.id);
     return s + (p?.price || 0) * it.qty;
   }, 0);
+
+  const normalizedPhone = normalizePhone(phone);
+  // El despacho es dentro del Gran Santiago: la comuna escrita debe matchear
+  // una de la lista (búsqueda vía <datalist>, sin distinguir mayúsculas).
+  const matchedComuna = SANTIAGO_COMUNAS.find((c) => c.toLowerCase() === comuna.trim().toLowerCase());
+  const addressComplete = delivery !== 'despacho' || (street.trim() && streetNumber.trim() && matchedComuna);
+  const canSubmit = items.length > 0 && name.trim() && normalizedPhone && addressComplete;
+  const address = delivery === 'despacho' && addressComplete
+    ? `${street.trim()} ${streetNumber.trim()}, ${matchedComuna}`
+    : null;
+
+  const buildMessage = () => {
+    const lines = [
+      `¡Hola! Soy ${name.trim()}, quiero hacer un pedido en Onoto y Sazón:`,
+      '',
+      ...items.map((it) => {
+        const p = packs.find((x) => x.id === it.id);
+        return `• ${it.qty}× ${p.name} (${p.qtyLabel}) — ${formatCLP(p.price * it.qty)}`;
+      }),
+      '',
+      `Total: ${formatCLP(total)}`,
+      `Modalidad: ${delivery === 'retiro' ? 'Retiro' : 'Despacho a domicilio'}`,
+      address ? `Dirección: ${address}` : null,
+      `Teléfono: ${normalizedPhone}`,
+      notes.trim() ? `Notas: ${notes.trim()}` : null,
+    ].filter(Boolean);
+    return lines.join('\n');
+  };
+
+  function handlePedir() {
+    if (!canSubmit) return;
+    const waUrl = `https://wa.me/${WHATSAPP_PHONE}?text=${encodeURIComponent(buildMessage())}`;
+    // Abrimos la pestaña ACÁ, en el manejador sincrónico del clic: si se abre
+    // después de un `await` deja de ser resultado directo del gesto del
+    // usuario y el navegador la bloquea (o la abre sin el ?text= precargado).
+    // OJO: sin `noopener` — con ese flag `window.open` devuelve null y
+    // perdemos la referencia para navegarla después (queda una pestaña en
+    // blanco huérfana). Como mitigación seteamos `.opener = null` a mano.
+    const waTab = window.open('', '_blank');
+    if (waTab) {
+      try { waTab.opener = null; } catch { /* algunos navegadores lo bloquean; no es crítico */ }
+    }
+    const placeOrderPromise = placeOrder({
+      name: name.trim(),
+      phone: normalizedPhone,
+      items: items.map((it) => {
+        const p = packs.find((x) => x.id === it.id);
+        return { packId: p.id, packName: p.name, qty: it.qty, priceAtTime: p.price ?? null };
+      }),
+      delivery,
+      address,
+      notes: notes.trim() || null,
+      total: total || null,
+      quantityHallacas: items.reduce((s, it) => {
+        const p = packs.find((x) => x.id === it.id);
+        return s + (p?.qty || 0) * it.qty;
+      }, 0),
+    });
+    onOrderSuccess?.();
+    setSubmitting({ waTab, waUrl, placeOrderPromise });
+  }
+
+  if (submitting) {
+    return (
+      <OrderTransition
+        waTab={submitting.waTab}
+        waUrl={submitting.waUrl}
+        placeOrderPromise={submitting.placeOrderPromise}
+        onClose={onClose}
+        onOpenAuth={() => { onClose?.(); onOpenAuth?.(); }}
+      />);
+
+  }
 
   return (
     <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="cart-modal-title">
@@ -376,111 +655,31 @@ function CartModal({ items, packs, onClose, onChangeQty, onRemove, onCheckout })
             })}
             </div>
           }
-        </div>
-        {items.length > 0 &&
-        <div className="modal__footer">
-            <div className="modal__total">
-              <span className="modal__total-label">Total</span>
-              <span className="modal__total-value">{formatCLP(total)}</span>
-            </div>
-            <button className="btn btn--primary modal__cta" onClick={onCheckout}>
-              <IconWhatsapp size={16} /> Pedir
-            </button>
-          </div>
-        }
-      </div>
-    </div>);
-
-}
-
-/* ---------- Checkout Modal ---------- */
-function CheckoutModal({ items, packs, user, onClose, onOrderSuccess }) {
-  const [step, setStep] = useState(1);
-  const [name, setName] = useState(user?.name || "");
-  const [phone, setPhone] = useState("");
-  const [date, setDate] = useState("");
-  const [notes, setNotes] = useState("");
-  const [delivery, setDelivery] = useState("retiro");
-  const [loading, setLoading] = useState(false);
-  const [apiError, setApiError] = useState("");
-
-  const total = items.reduce((s, it) => {
-    const p = packs.find((x) => x.id === it.id);
-    return s + (p?.price || 0) * it.qty;
-  }, 0);
-
-  const buildMessage = () => {
-    const lines = [
-    "¡Hola Anthony! Quiero hacer un pedido en Onoto y Sazón:",
-    "",
-    ...items.map((it) => {
-      const p = packs.find((x) => x.id === it.id);
-      return `• ${it.qty}× ${p.name} (${p.qtyLabel}) — ${formatCLP(p.price * it.qty)}`;
-    }),
-    "",
-    `Total: ${formatCLP(total)}`,
-    `Modalidad: ${delivery === "retiro" ? "Retiro" : "Despacho a domicilio"}`,
-    `Fecha tentativa: ${date || "por coordinar"}`,
-    `Nombre: ${name}`,
-    `Teléfono: ${phone}`,
-    notes ? `Notas: ${notes}` : null].
-    filter(Boolean);
-    return lines.join("\n");
-  };
-
-  const canSubmit = name.trim() && phone.trim();
-  const waUrl = `${WHATSAPP_URL}?text=${encodeURIComponent(buildMessage())}`;
-
-  async function handleConfirm() {
-    setApiError("");
-    setLoading(true);
-    try {
-      await placeOrder({
-        items: items.map((it) => {
-          const p = packs.find((x) => x.id === it.id);
-          return { packId: p.id, packName: p.name, qty: it.qty, priceAtTime: p.price ?? null };
-        }),
-        delivery,
-        dateHint: date || null,
-        notes: notes || null,
-        total: total || null,
-      });
-      // Pedido guardado — ahora abrimos WhatsApp y limpiamos el carrito
-      window.open(waUrl, '_blank', 'noopener,noreferrer');
-      onOrderSuccess?.();
-      onClose();
-    } catch (err) {
-      setApiError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="checkout-title">
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
-        <div className="modal__handle" aria-hidden="true"></div>
-        <button className="modal__close" onClick={onClose} aria-label="Cerrar">
-          <IconClose />
-        </button>
-        <div className="modal__body" style={{ paddingTop: 28 }}>
-          <div>
-            <span className="section__eyebrow">Paso {step} de 2</span>
-            <h2 id="checkout-title" className="modal__title">
-              {step === 1 ? <>Tus <span className="modal__title-em">datos</span></> : <>Confirmemos <span className="modal__title-em">por WhatsApp</span></>}
-            </h2>
-          </div>
-
-          {step === 1 ?
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <Field label="Nombre" id="ck-name">
-                <input id="ck-name" className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="¿Cómo te llamas?" />
+          {items.length > 0 &&
+          <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 20 }}>
+              <Field label="Nombre" id="cart-name">
+                <input id="cart-name" className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="¿Cómo te llamas?" />
               </Field>
-              <Field label="Teléfono" id="ck-phone">
-                <input id="ck-phone" className="form-input" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+56 9 ..." />
-              </Field>
-              <Field label="Fecha tentativa" id="ck-date">
-                <input id="ck-date" className="form-input" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+              <Field label="Teléfono" id="cart-phone">
+                <div className="phone-input" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 14, color: "var(--fg-muted)" }}>+56</span>
+                  <input
+                    id="cart-phone"
+                    className="form-input"
+                    type="tel"
+                    inputMode="numeric"
+                    value={phone}
+                    onChange={(e) => setPhone(phoneToDigits(e.target.value).slice(0, 9))}
+                    placeholder="9 dígitos"
+                    maxLength={9}
+                    aria-invalid={phone.length === 9 && !normalizedPhone}
+                  />
+                </div>
+                {phone.length === 9 && !normalizedPhone &&
+                <p role="alert" style={{ margin: "6px 0 0", fontSize: 12.5, color: "var(--onoto-crimson, #880D1E)" }}>
+                    Número inválido: los celulares chilenos empiezan con 9 (ej. 912345678).
+                  </p>
+                }
               </Field>
               <Field label="Modalidad">
                 <div style={{ display: "flex", gap: 8 }}>
@@ -501,54 +700,36 @@ function CheckoutModal({ items, packs, user, onClose, onOrderSuccess }) {
                 )}
                 </div>
               </Field>
-              <Field label="Notas (opcional)" id="ck-notes">
-                <textarea id="ck-notes" className="form-input" rows="3" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Picante, sin pasitas, alergias..." />
+              {delivery === 'despacho' &&
+              <AddressFields
+                idPrefix="cart"
+                street={street} setStreet={setStreet}
+                streetNumber={streetNumber} setStreetNumber={setStreetNumber}
+                comuna={comuna} setComuna={setComuna}
+                matchedComuna={matchedComuna} />
+              }
+              <Field label="Notas (opcional)" id="cart-notes">
+                <textarea id="cart-notes" className="form-input" rows="2" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Picante, sin pasitas, alergias..." />
               </Field>
-            </div> :
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <div style={{ padding: 16, background: "var(--surface-tint)", border: "1px solid var(--line)", borderRadius: "var(--r-md)", fontSize: 14, lineHeight: 1.55, whiteSpace: "pre-line", color: "var(--fg-muted)", fontFamily: "ui-monospace, Menlo, monospace" }}>
-                {buildMessage()}
-              </div>
-              <p style={{ margin: 0, fontSize: 13, color: "var(--fg-muted)" }}>
-                Al confirmar, guardaremos tu pedido y abriremos WhatsApp con este mensaje listo. Anthony te confirmará disponibilidad y cuenta para transferencia.
-              </p>
-              {apiError && (
-                <p role="alert" style={{ margin: 0, fontSize: 13, color: "var(--onoto-crimson, #880D1E)", fontWeight: 500 }}>
-                  {apiError}
-                </p>
-              )}
             </div>
           }
         </div>
-
+        {items.length > 0 &&
         <div className="modal__footer">
-          {step === 1 ?
-          <>
-              <button className="btn btn--ghost" onClick={onClose}>Cancelar</button>
-              <button
+            <div className="modal__total">
+              <span className="modal__total-label">Total</span>
+              <span className="modal__total-value">{formatCLP(total)}</span>
+            </div>
+            <button
               className="btn btn--primary modal__cta"
-              onClick={() => setStep(2)}
+              onClick={handlePedir}
               disabled={!canSubmit}
-              style={{ opacity: canSubmit ? 1 : 0.5 }}>
-
-                Revisar pedido <IconArrow size={14} />
-              </button>
-            </> :
-
-          <>
-              <button className="btn btn--ghost" onClick={() => setStep(1)} disabled={loading}>Atrás</button>
-              <button
-                className="btn btn--primary modal__cta"
-                onClick={handleConfirm}
-                disabled={loading}
-              >
-                <IconWhatsapp size={16} />
-                {loading ? 'Guardando…' : 'Confirmar y enviar'}
-              </button>
-            </>
-          }
-        </div>
+              style={{ opacity: canSubmit ? 1 : 0.5 }}
+            >
+              <IconWhatsapp size={16} /> Pedir
+            </button>
+          </div>
+        }
       </div>
     </div>);
 
@@ -702,5 +883,5 @@ function Footer() {
 
 export {
   formatCLP, Placeholder, Nav, Hero, MenuCard, MenuSection,
-  PackModal, CartModal, CheckoutModal, Field, Tradition, Contact, Footer,
+  PackModal, CartModal, Field, Tradition, Contact, Footer,
 };

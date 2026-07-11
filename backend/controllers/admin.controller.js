@@ -3,14 +3,20 @@ const { db } = require('../database/db');
 const VALID_STATUSES = ['pending', 'confirmed', 'preparing', 'shipped', 'delivered', 'cancelled'];
 
 function getAllOrders(req, res) {
+  // LEFT JOIN: los pedidos anónimos (user_id NULL) deben seguir apareciendo.
+  // o.customer_name/customer_phone son la fuente de verdad (se guardan en
+  // cada pedido); los datos de `users` solo llenan el hueco si faltan.
   const orders = db.prepare(`
     SELECT
-      o.id, o.status, o.delivery, o.date_hint, o.notes, o.total_clp,
+      o.id, o.status, o.delivery, o.address, o.date_hint, o.notes, o.total_clp,
+      o.quantity_hallacas, o.payment_method, o.source,
       o.created_at, o.updated_at,
-      u.id AS user_id, u.name AS customer_name,
-      u.email AS customer_email, u.phone AS customer_phone
+      u.id AS user_id,
+      COALESCE(NULLIF(o.customer_name, ''), u.name) AS customer_name,
+      u.email AS customer_email,
+      COALESCE(o.customer_phone, u.phone) AS customer_phone
     FROM orders o
-    JOIN users u ON u.id = o.user_id
+    LEFT JOIN users u ON u.id = o.user_id
     ORDER BY o.created_at DESC
   `).all();
 
@@ -24,9 +30,13 @@ function getAllOrders(req, res) {
       id: o.id,
       status: o.status,
       delivery: o.delivery,
+      address: o.address,
       date_hint: o.date_hint,
       notes: o.notes,
       total_clp: o.total_clp,
+      quantity_hallacas: o.quantity_hallacas,
+      payment_method: o.payment_method,
+      source: o.source,
       created_at: o.created_at,
       updated_at: o.updated_at,
       customer: {

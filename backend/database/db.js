@@ -17,6 +17,10 @@ db.pragma('foreign_keys = ON');
 const schema = fs.readFileSync(SCHEMA_PATH, 'utf8');
 db.exec(schema);
 
+// Trae al día bases de datos creadas con el schema viejo (idempotente)
+const { runMigrations } = require('./migrate');
+runMigrations(db);
+
 function createAdminIfNeeded() {
   const email = process.env.ADMIN_EMAIL;
   if (!email) return;

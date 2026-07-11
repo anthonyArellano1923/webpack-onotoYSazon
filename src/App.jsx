@@ -9,7 +9,7 @@ import { WHATSAPP_URL } from './data/socials';
 import { IconCart, IconWhatsapp, IconCheck } from './components/Icons';
 import {
   formatCLP, Nav, Hero, MenuSection, PackModal,
-  CartModal, CheckoutModal, Tradition, Contact, Footer,
+  CartModal, Tradition, Contact, Footer,
 } from './components/Sections';
 import {
   useTweaks, TweaksPanel, TweakSection, TweakSlider, TweakToggle,
@@ -134,25 +134,23 @@ export default function App() {
   /* Modals */
   const [openPack, setOpenPack] = useState(null);
   const [cartOpen, setCartOpen] = useState(false);
-  const [checkoutOpen, setCheckoutOpen] = useState(false);
 
   useEffect(() => {
-    const anyOpen = openPack || cartOpen || checkoutOpen || authModalOpen;
+    const anyOpen = openPack || cartOpen || authModalOpen;
     document.body.style.overflow = anyOpen ? 'hidden' : '';
     return () => { document.body.style.overflow = ''; };
-  }, [openPack, cartOpen, checkoutOpen, authModalOpen]);
+  }, [openPack, cartOpen, authModalOpen]);
 
   useEffect(() => {
     const onKey = (e) => {
       if (e.key !== 'Escape') return;
       if (authModalOpen) setAuthModalOpen(false);
-      else if (checkoutOpen) setCheckoutOpen(false);
       else if (cartOpen) setCartOpen(false);
       else if (openPack) setOpenPack(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [openPack, cartOpen, checkoutOpen, authModalOpen]);
+  }, [openPack, cartOpen, authModalOpen]);
 
   /* Toast */
   const [toast, setToast] = useState({ visible: false, msg: '' });
@@ -164,15 +162,6 @@ export default function App() {
 
   useReveal();
   const activeSection = useActiveSection();
-
-  const handleCheckoutFromCart = () => {
-    setCartOpen(false);
-    if (!user) {
-      setAuthModalOpen(true);
-    } else {
-      setCheckoutOpen(true);
-    }
-  };
 
   return (
     <div className="app">
@@ -220,25 +209,17 @@ export default function App() {
       </div>
 
       {/* Modals */}
-      {openPack && <PackModal pack={openPack} onClose={() => setOpenPack(null)} onAdd={addToCart} />}
-      {cartOpen && <CartModal items={cart} packs={packs} onClose={() => setCartOpen(false)}
-        onChangeQty={changeQty} onRemove={removeFromCart} onCheckout={handleCheckoutFromCart} />}
-      {checkoutOpen && (
-        <CheckoutModal
-          items={cart}
-          packs={packs}
-          user={user}
-          onClose={() => setCheckoutOpen(false)}
-          onOrderSuccess={() => setCart([])}
-        />
-      )}
+      {openPack && <PackModal pack={openPack} user={user} onClose={() => setOpenPack(null)} onAdd={addToCart}
+        onOpenAuth={() => setAuthModalOpen(true)} />}
+      {cartOpen && <CartModal items={cart} packs={packs} user={user} onClose={() => setCartOpen(false)}
+        onChangeQty={changeQty} onRemove={removeFromCart} onOrderSuccess={() => setCart([])}
+        onOpenAuth={() => setAuthModalOpen(true)} />}
       {authModalOpen && (
         <AuthModal
           onClose={() => setAuthModalOpen(false)}
           onSuccess={(loggedUser) => {
             setUser(loggedUser);
             setAuthModalOpen(false);
-            setCheckoutOpen(true);
           }}
         />
       )}

@@ -51,14 +51,14 @@ const packs = [
   {
     id: 'pXL',
     name: 'Diciembre completo',
-    qty: 15,
-    qtyLabel: '+15 hallacas',
+    qty: 10,
+    qtyLabel: '+10 hallacas',
     price: null,
     tag: 'Por encargo',
     tagline: 'Para que tu casa huela a Caracas en diciembre.',
     description:
-      'Pedido grande — más de 15 hallacas, hablamos contigo directamente para coordinar cantidad, retiro y precio. Ideal para encuentros familiares grandes, fiestas de fin de año o regalos para tu gente. Pedido con 5 días de anticipación.',
-    ingredients: ['15+ hallacas', 'Acompañamientos a elección', 'Coordinación directa', 'Entrega o retiro'],
+      'Pedido grande — más de 10 hallacas. Cuéntanos cuántas necesitas y coordinamos contigo cantidad, retiro o despacho y precio. Ideal para encuentros familiares grandes, fiestas de fin de año o regalos para tu gente. Pedido con 5 días de anticipación.',
+    ingredients: ['10+ hallacas', 'Misma receta tradicional', 'Coordinación directa', 'Entrega o retiro'],
     image: 'https://i.ibb.co/LdGZg9fN/a73918b40d264892fb9b81da7fce9846.jpg',
   },
 ];
