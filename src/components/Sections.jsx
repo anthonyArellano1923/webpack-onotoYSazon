@@ -486,6 +486,14 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth }) {
 
 /* ---------- Address Fields (despacho) ---------- */
 function AddressFields({ idPrefix, street, setStreet, streetNumber, setStreetNumber, comuna, setComuna, matchedComuna }) {
+  // Desplegable propio en vez de <datalist>: Safari iOS no soporta datalist
+  // (el cliente en iPhone no veía sugerencia alguna). Las opciones usan
+  // onMouseDown + preventDefault para ganarle al blur del input.
+  const [comunaOpen, setComunaOpen] = useState(false);
+  const query = comuna.trim().toLowerCase();
+  const suggestions = SANTIAGO_COMUNAS.filter((c) => c.toLowerCase().includes(query));
+  const showList = comunaOpen && !matchedComuna && suggestions.length > 0;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <p style={{ margin: 0, fontSize: 12.5, color: "var(--fg-muted)" }}>
@@ -504,19 +512,43 @@ function AddressFields({ idPrefix, street, setStreet, streetNumber, setStreetNum
         </div>
       </div>
       <Field label="Comuna" id={`${idPrefix}-comuna`}>
-        <input
-          id={`${idPrefix}-comuna`}
-          className="form-input"
-          list={`${idPrefix}-comuna-options`}
-          value={comuna}
-          onChange={(e) => setComuna(e.target.value)}
-          placeholder="Escribe para buscar tu comuna..."
-          autoComplete="off"
-          aria-invalid={comuna.trim().length > 0 && !matchedComuna}
-        />
-        <datalist id={`${idPrefix}-comuna-options`}>
-          {SANTIAGO_COMUNAS.map((c) => <option key={c} value={c} />)}
-        </datalist>
+        <div style={{ position: "relative" }}>
+          <input
+            id={`${idPrefix}-comuna`}
+            className="form-input"
+            style={{ width: "100%" }}
+            value={comuna}
+            onChange={(e) => setComuna(e.target.value)}
+            onFocus={() => setComunaOpen(true)}
+            onBlur={() => setComunaOpen(false)}
+            placeholder="Escribe para buscar tu comuna..."
+            autoComplete="off"
+            role="combobox"
+            aria-expanded={showList}
+            aria-controls={`${idPrefix}-comuna-options`}
+            aria-invalid={comuna.trim().length > 0 && !matchedComuna}
+          />
+          {showList &&
+          <div
+            id={`${idPrefix}-comuna-options`}
+            role="listbox"
+            className="combo-list"
+          >
+              {suggestions.map((c) =>
+            <button
+              key={c}
+              type="button"
+              role="option"
+              aria-selected={false}
+              className="combo-list__option"
+              onMouseDown={(e) => { e.preventDefault(); setComuna(c); setComunaOpen(false); }}
+            >
+                  {c}
+                </button>
+            )}
+            </div>
+          }
+        </div>
       </Field>
       {comuna.trim().length > 0 && !matchedComuna &&
       <p role="alert" style={{ margin: "-8px 0 0", fontSize: 12.5, color: "var(--onoto-crimson, #880D1E)" }}>

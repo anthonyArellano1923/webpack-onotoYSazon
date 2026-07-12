@@ -92,6 +92,9 @@ html, body { margin: 0; padding: 0; }
 html {
   scroll-behavior: smooth;
   -webkit-text-size-adjust: 100%;
+  /* Safari iOS ignora overflow-x:hidden si está solo en body y permite paneo
+     lateral cuando algo se desborda (ej. la imagen del hero con scale). */
+  overflow-x: clip;
 }
 body {
   font-family: var(--font-ui);
@@ -1597,4 +1600,31 @@ a { color: inherit; text-decoration: none; }
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--fg-subtle);
+}
+
+/* ============ Combo de comunas (reemplazo de <datalist>, sin soporte en iOS) ============ */
+.combo-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.25);
+}
+.combo-list__option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 11px 14px;
+  font-size: 14.5px;
+  border-bottom: 1px solid var(--line);
+}
+.combo-list__option:last-child { border-bottom: 0; }
+.combo-list__option:hover, .combo-list__option:focus-visible {
+  background: var(--surface-tint);
 }
