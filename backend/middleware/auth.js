@@ -10,7 +10,8 @@ function requireAuth(req, res, next) {
 
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = { id: payload.sub, email: payload.email, role: payload.role };
+    // Payload nuevo: { sub, phone, role } (login por teléfono)
+    req.user = { id: payload.sub, phone: payload.phone, role: payload.role };
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {

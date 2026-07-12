@@ -13,7 +13,8 @@ function optionalAuth(req, res, next) {
   const token = header.split(' ')[1];
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = { id: payload.sub, email: payload.email, role: payload.role };
+    // Payload nuevo: { sub, phone, role } (login por teléfono)
+    req.user = { id: payload.sub, phone: payload.phone, role: payload.role };
   } catch {
     // Token ausente/inválido/expirado: seguimos como pedido anónimo.
   }

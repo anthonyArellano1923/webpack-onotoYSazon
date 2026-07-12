@@ -23,3 +23,4 @@ backend/*.db-shm
 deploy_plan/00_plan_de_deploy.md
 deploy_plan/GUIA_QUE_HICE.md
 deploy_plan/03_mejoras_ux_pedidos_admin.md
+deploy_plan/04_tandas_produccion_canal_venta.md

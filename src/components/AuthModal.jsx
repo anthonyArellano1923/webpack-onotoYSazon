@@ -1,30 +1,39 @@
 import { useState } from 'react';
 import { registerUser, loginUser, saveAuth } from '../services/api';
+import { normalizePhone, phoneToDigits } from '../utils/phone';
 import { IconClose } from './Icons';
 
+/**
+ * Autenticación por TELÉFONO (decisión del dueño: sus clientes viven en
+ * WhatsApp, no en el correo). El registro pide nombre, teléfono y contraseña;
+ * la dirección es opcional y sirve para prellenar el despacho del carrito.
+ */
 export default function AuthModal({ onClose, onSuccess }) {
   const [tab, setTab] = useState('login');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   // Campos de login
-  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPhone, setLoginPhone] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
 
   // Campos de registro
   const [regName, setRegName] = useState('');
-  const [regEmail, setRegEmail] = useState('');
   const [regPhone, setRegPhone] = useState('');
+  const [regAddress, setRegAddress] = useState('');
   const [regPassword, setRegPassword] = useState('');
 
   function resetError() { setError(''); }
+
+  const loginPhoneValid = normalizePhone(loginPhone) !== null;
+  const regPhoneValid = normalizePhone(regPhone) !== null;
 
   async function handleLogin(e) {
     e.preventDefault();
     setError('');
     setLoading(true);
     try {
-      const data = await loginUser({ email: loginEmail, password: loginPassword });
+      const data = await loginUser({ phone: loginPhone, password: loginPassword });
       saveAuth(data.accessToken, data.user);
       onSuccess(data.user);
     } catch (err) {
@@ -39,9 +48,9 @@ export default function AuthModal({ onClose, onSuccess }) {
     setError('');
     setLoading(true);
     try {
-      await registerUser({ name: regName, email: regEmail, password: regPassword, phone: regPhone });
+      await registerUser({ name: regName, phone: regPhone, password: regPassword, address: regAddress || undefined });
       // Login automático tras el registro
-      const data = await loginUser({ email: regEmail, password: regPassword });
+      const data = await loginUser({ phone: regPhone, password: regPassword });
       saveAuth(data.accessToken, data.user);
       onSuccess(data.user);
     } catch (err) {
@@ -98,16 +107,12 @@ export default function AuthModal({ onClose, onSuccess }) {
 
           {tab === 'login' ? (
             <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <AuthField label="Correo" id="login-email">
-                <input
-                  id="login-email"
-                  className="form-input"
-                  type="email"
-                  autoComplete="email"
-                  required
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  placeholder="tu@correo.com"
+              <AuthField label="Teléfono" id="login-phone">
+                <PhoneInput
+                  id="login-phone"
+                  value={loginPhone}
+                  onChange={setLoginPhone}
+                  autoComplete="tel-national"
                 />
               </AuthField>
               <AuthField label="Contraseña" id="login-pwd">
@@ -123,7 +128,9 @@ export default function AuthModal({ onClose, onSuccess }) {
                 />
               </AuthField>
               {error && <p className="auth-modal__error" role="alert">{error}</p>}
-              <button type="submit" className="btn btn--primary modal__cta" disabled={loading}>
+              <button type="submit" className="btn btn--primary modal__cta"
+                disabled={loading || !loginPhoneValid}
+                style={{ opacity: (loading || !loginPhoneValid) ? 0.6 : 1 }}>
                 {loading ? 'Entrando…' : 'Entrar'}
               </button>
             </form>
@@ -140,26 +147,28 @@ export default function AuthModal({ onClose, onSuccess }) {
                   placeholder="¿Cómo te llamas?"
                 />
               </AuthField>
-              <AuthField label="Correo" id="reg-email">
-                <input
-                  id="reg-email"
-                  className="form-input"
-                  type="email"
-                  autoComplete="email"
-                  required
-                  value={regEmail}
-                  onChange={(e) => setRegEmail(e.target.value)}
-                  placeholder="tu@correo.com"
-                />
-              </AuthField>
-              <AuthField label="Teléfono (opcional)" id="reg-phone">
-                <input
+              <AuthField label="Teléfono" id="reg-phone">
+                <PhoneInput
                   id="reg-phone"
-                  className="form-input"
-                  type="tel"
                   value={regPhone}
-                  onChange={(e) => setRegPhone(e.target.value)}
-                  placeholder="+56 9 ..."
+                  onChange={setRegPhone}
+                  autoComplete="tel-national"
+                />
+                {regPhone.length === 9 && !regPhoneValid &&
+                <p role="alert" style={{ margin: '6px 0 0', fontSize: 12.5, color: 'var(--onoto-crimson, #880D1E)' }}>
+                    Número inválido: los celulares chilenos empiezan con 9 (ej. 912345678).
+                  </p>
+                }
+              </AuthField>
+              <AuthField label="Dirección (opcional)" id="reg-address">
+                <input
+                  id="reg-address"
+                  className="form-input"
+                  type="text"
+                  value={regAddress}
+                  onChange={(e) => setRegAddress(e.target.value)}
+                  placeholder="Calle 123, Comuna (para despachos)"
+                  maxLength={200}
                 />
               </AuthField>
               <AuthField label="Contraseña" id="reg-pwd">
@@ -175,13 +184,37 @@ export default function AuthModal({ onClose, onSuccess }) {
                 />
               </AuthField>
               {error && <p className="auth-modal__error" role="alert">{error}</p>}
-              <button type="submit" className="btn btn--primary modal__cta" disabled={loading}>
+              <button type="submit" className="btn btn--primary modal__cta"
+                disabled={loading || !regPhoneValid}
+                style={{ opacity: (loading || !regPhoneValid) ? 0.6 : 1 }}>
                 {loading ? 'Creando cuenta…' : 'Crear cuenta'}
               </button>
             </form>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Input de teléfono con addon +56: el usuario escribe solo los 9 dígitos. */
+function PhoneInput({ id, value, onChange, autoComplete }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <span style={{ fontSize: 14, color: 'var(--fg-muted)' }}>+56</span>
+      <input
+        id={id}
+        className="form-input"
+        type="tel"
+        inputMode="numeric"
+        autoComplete={autoComplete}
+        required
+        value={value}
+        onChange={(e) => onChange(phoneToDigits(e.target.value).slice(0, 9))}
+        placeholder="9 dígitos"
+        maxLength={9}
+        style={{ flex: 1 }}
+      />
     </div>
   );
 }

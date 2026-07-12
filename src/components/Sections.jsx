@@ -35,7 +35,7 @@ function Placeholder({ variant, label }) {
 }
 
 /* ---------- Nav ---------- */
-function Nav({ cartCount, onOpenCart, theme, onToggleTheme, activeSection, user, onOpenAuth, onLogout }) {
+function Nav({ cartCount, onOpenCart, theme, onToggleTheme, activeSection, user, onOpenAuth, onLogout, onOpenAdmin }) {
   const links = [
   { id: "menu", label: "Menú" },
   { id: "tradition", label: "Tradición" },
@@ -60,6 +60,16 @@ function Nav({ cartCount, onOpenCart, theme, onToggleTheme, activeSection, user,
         <button className="icon-btn" onClick={onToggleTheme} aria-label={theme === "dark" ? "Cambiar a modo claro" : "Cambiar a modo oscuro"}>
           {theme === "dark" ? <IconSun /> : <IconMoon />}
         </button>
+        {user?.role === 'admin' && (
+          <button
+            className="icon-btn"
+            onClick={onOpenAdmin}
+            aria-label="Abrir panel de administración"
+            style={{ fontSize: 12, padding: '4px 10px', fontWeight: 700 }}
+          >
+            Panel
+          </button>
+        )}
         {user ? (
           <button
             className="icon-btn"
@@ -143,25 +153,28 @@ function Hero({ onShopClick }) {
 
 /* ---------- Menu Card ---------- */
 function MenuCard({ pack, onOpen, onAdd, isFav, onToggleFav }) {
+  // `available === false` viene de la API (apagado a mano o sin stock);
+  // los packs del fallback estático no traen el flag ⇒ se muestran disponibles.
+  const soldOut = pack.available === false;
   const handleAdd = (e) => {
     e.stopPropagation();
     onAdd(pack);
   };
   return (
     <article
-      className="menu-card"
+      className={`menu-card${soldOut ? " menu-card--soldout" : ""}`}
       onClick={() => onOpen(pack)}
       tabIndex={0}
       role="button"
-      aria-label={`Ver detalle: ${pack.name}, ${pack.qtyLabel}, ${formatCLP(pack.price)}`}
+      aria-label={`Ver detalle: ${pack.name}, ${pack.qtyLabel}, ${soldOut ? "agotado" : formatCLP(pack.price)}`}
       onKeyDown={(e) => {if (e.key === "Enter" || e.key === " ") {e.preventDefault();onOpen(pack);}}}>
-      
+
       <div className="menu-card__media" aria-hidden="true">
         {pack.image ? <img className="menu-card__media-img" src={pack.image} alt={pack.name} loading="lazy" /> : <Placeholder variant="default" label={pack.name} />}
       </div>
       <div className="menu-card__top">
         <span className="menu-card__tag">
-          <IconSparkle size={11} /> {pack.tag}
+          <IconSparkle size={11} /> {soldOut ? "Agotado" : pack.tag}
         </span>
         <button
           className={`menu-card__fav${isFav ? " menu-card__fav--active" : ""}`}
@@ -178,9 +191,9 @@ function MenuCard({ pack, onOpen, onAdd, isFav, onToggleFav }) {
           <h3 className="menu-card__name">{pack.name}</h3>
           <div className="menu-card__row">
             <div className="menu-card__price">
-              {pack.price ? formatCLP(pack.price) : "Consulta"}
+              {soldOut ? "Agotado" : (pack.price ? formatCLP(pack.price) : "Consulta")}
             </div>
-            {pack.price != null &&
+            {pack.price != null && !soldOut &&
             <button
               className="menu-card__add"
               onClick={handleAdd}
@@ -256,6 +269,7 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth }) {
   if (!pack) return null;
 
   const isCustom = pack.price == null;
+  const soldOut = pack.available === false;
   const total = isCustom ? null : pack.price * qty;
 
   const dec = () => setQty((q) => Math.max(1, q - 1));
@@ -447,20 +461,21 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth }) {
           <>
               <div className="modal__total">
                 <span className="modal__total-label">Total</span>
-                <span className="modal__total-value">{formatCLP(total)}</span>
+                <span className="modal__total-value">{soldOut ? "Agotado" : formatCLP(total)}</span>
               </div>
-              <button className="btn btn--primary modal__cta" onClick={add}>
-                Añadir al carrito
+              <button className="btn btn--primary modal__cta" onClick={add}
+                disabled={soldOut} style={{ opacity: soldOut ? 0.5 : 1 }}>
+                {soldOut ? "Agotado" : "Añadir al carrito"}
               </button>
             </> :
 
           <button
             className="btn btn--primary modal__cta"
             onClick={handleCustomSubmit}
-            disabled={!canSubmitCustom}
-            style={{ opacity: canSubmitCustom ? 1 : 0.5 }}>
+            disabled={!canSubmitCustom || soldOut}
+            style={{ opacity: (canSubmitCustom && !soldOut) ? 1 : 0.5 }}>
 
-              <IconWhatsapp size={16} /> Pedir
+              <IconWhatsapp size={16} /> {soldOut ? "Agotado" : "Pedir"}
             </button>
           }
         </div>

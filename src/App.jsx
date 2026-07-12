@@ -4,7 +4,7 @@
  * @module App
  */
 import { useState, useEffect, useCallback } from 'react';
-import packs from './data/packs';
+import staticPacks from './data/packs';
 import { WHATSAPP_URL } from './data/socials';
 import { IconCart, IconWhatsapp, IconCheck } from './components/Icons';
 import {
@@ -15,7 +15,8 @@ import {
   useTweaks, TweaksPanel, TweakSection, TweakSlider, TweakToggle,
 } from './lib/TweaksPanel';
 import AuthModal from './components/AuthModal';
-import { getStoredUser, clearAuth } from './services/api';
+import AdminDashboard from './components/AdminDashboard';
+import { getStoredUser, clearAuth, getPacks } from './services/api';
 
 /* ---- Hooks ---- */
 function useTheme() {
@@ -87,6 +88,16 @@ export default function App() {
 
   const handleToggleTheme = () => { setTweak('darkMode', theme !== 'dark'); };
 
+  /* Packs: la BD es la fuente de verdad (precios y disponibilidad editables
+     desde el admin). packs.js queda como fallback visual si la API no
+     responde (sin flag `available` ⇒ todo se muestra disponible). */
+  const [packs, setPacks] = useState(staticPacks);
+  useEffect(() => {
+    getPacks()
+      .then((data) => { if (data.packs?.length) setPacks(data.packs); })
+      .catch((err) => console.warn('No se pudo cargar el catálogo desde la API, usando fallback:', err.message));
+  }, []);
+
   /* Cart */
   const [cart, setCart] = useState(() => {
     try { return JSON.parse(localStorage.getItem('oys-cart') || '[]'); } catch { return []; }
@@ -101,6 +112,7 @@ export default function App() {
 
   const addToCart = (pack, qty = 1) => {
     if (pack.price == null) return;
+    if (pack.available === false) { showToast(`${pack.name} está agotado`); return; }
     setCart((c) => {
       const ex = c.find((it) => it.id === pack.id);
       if (ex) return c.map((it) => (it.id === pack.id ? { ...it, qty: it.qty + qty } : it));
@@ -134,6 +146,7 @@ export default function App() {
   /* Modals */
   const [openPack, setOpenPack] = useState(null);
   const [cartOpen, setCartOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
 
   useEffect(() => {
     const anyOpen = openPack || cartOpen || authModalOpen;
@@ -170,7 +183,8 @@ export default function App() {
 
       <Nav cartCount={cartCount} onOpenCart={() => setCartOpen(true)}
            theme={theme} onToggleTheme={handleToggleTheme} activeSection={activeSection}
-           user={user} onOpenAuth={() => setAuthModalOpen(true)} onLogout={handleLogout} />
+           user={user} onOpenAuth={() => setAuthModalOpen(true)} onLogout={handleLogout}
+           onOpenAdmin={() => setAdminOpen(true)} />
 
       <main>
         <Hero onShopClick={() => {
@@ -222,6 +236,9 @@ export default function App() {
             setAuthModalOpen(false);
           }}
         />
+      )}
+      {adminOpen && user?.role === 'admin' && (
+        <AdminDashboard onClose={() => setAdminOpen(false)} />
       )}
 
       {/* Tweaks panel */}

@@ -9,6 +9,7 @@ const { createAdminIfNeeded } = require('./database/db');
 const authRoutes  = require('./routes/auth.routes');
 const orderRoutes = require('./routes/orders.routes');
 const adminRoutes = require('./routes/admin.routes');
+const packsRoutes = require('./routes/packs.routes');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -41,6 +42,7 @@ app.use('/api', apiLimiter);
 app.use('/api/auth',   authRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/admin',  adminRoutes);
+app.use('/api/packs',  packsRoutes);
 
 // Health check — Render.com lo usa para saber si el servicio está vivo
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
