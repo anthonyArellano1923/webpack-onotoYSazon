@@ -57,7 +57,7 @@ const packs = [
     tag: 'Por encargo',
     tagline: 'Para que tu casa huela a Caracas en diciembre.',
     description:
-      'Pedido grande — más de 10 hallacas. Cuéntanos cuántas necesitas y coordinamos contigo cantidad, retiro o despacho y precio. Ideal para encuentros familiares grandes, fiestas de fin de año o regalos para tu gente. Pedido con 5 días de anticipación.',
+      'Pedido grande — más de 10 hallacas. Cuéntanos cuántas necesitas y coordinamos contigo cantidad, retiro o despacho y precio. Ideal para encuentros familiares grandes, fiestas de fin de año o regalos para tu gente. Pedido con 1 semana de anticipación.',
     ingredients: ['10+ hallacas', 'Misma receta tradicional', 'Coordinación directa', 'Entrega o retiro'],
     image: 'https://i.ibb.co/LdGZg9fN/a73918b40d264892fb9b81da7fce9846.jpg',
   },

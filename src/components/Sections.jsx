@@ -141,7 +141,7 @@ function Hero({ onShopClick }) {
       {/* QA-02: texto editable — ver docs/CONTENIDO_EDITABLE.md */}
       <span className="hero__eyebrow">
         <span className="hero__eyebrow-dot" aria-hidden="true"></span>
-        Pedidos abiertos · Diciembre 2025
+        Pedidos abiertos · Diciembre 2026
       </span>
       <h1 className="hero__title">
         Hallacas hechas <span className="hero__title-em">a&nbsp;mano</span>,<br />con sazón de casa.
@@ -1022,7 +1022,7 @@ function Contact() {
               <span className="contact-info__icon"><IconMapPin /></span>
               <div>
                 <p className="contact-info__label">Retiro</p>
-                <p className="contact-info__value">Providencia, Santiago</p>
+                <p className="contact-info__value">Santiago Centro</p>
               </div>
             </div>
             {/* QA-05: anticipación editable — ver docs/CONTENIDO_EDITABLE.md */}
@@ -1030,7 +1030,7 @@ function Contact() {
               <span className="contact-info__icon"><IconClock /></span>
               <div>
                 <p className="contact-info__label">Anticipación</p>
-                <p className="contact-info__value">48h mínimo · 5 días para packs grandes</p>
+                <p className="contact-info__value">48h mínimo · 1 semana para pedidos grandes</p>
               </div>
             </div>
             <div style={{ marginTop: 8 }}>
