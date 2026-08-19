@@ -19,12 +19,8 @@ const orderValidators = [
     .isArray({ min: 1 }).withMessage('Debes incluir al menos un producto.'),
   body('items.*.packId')
     .notEmpty().withMessage('ID de pack requerido.'),
-  body('items.*.packName')
-    .notEmpty().withMessage('Nombre de pack requerido.')
-    .trim()
-    .isLength({ max: 100 }),
   body('items.*.qty')
-    .isInt({ min: 1, max: 100 }).withMessage('Cantidad debe ser entre 1 y 100.'),
+    .isInt({ min: 1, max: 99 }).withMessage('Cantidad debe ser entre 1 y 99.'),
   body('delivery')
     .optional()
     .isIn(['retiro', 'despacho']).withMessage('Modalidad inválida.'),

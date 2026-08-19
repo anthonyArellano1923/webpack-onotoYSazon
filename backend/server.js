@@ -27,7 +27,9 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
     callback(new Error('Not allowed by CORS'));
   },
-  methods: ['GET', 'POST', 'PATCH'],
+  // QA-12: sin DELETE aquí el navegador bloquea el preflight CORS de los
+  // nuevos endpoints de borrado (ventas, usuarios, lotes).
+  methods: ['GET', 'POST', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   optionsSuccessStatus: 200,
 }));

@@ -13,17 +13,23 @@
 
 const { normalizePhone } = require('../utils/phone');
 
+// QA-16: 'entregado'/'pendiente_entrega' salen del enum — la entrega pasa a
+// ser su propia columna (orders.delivered_at), no un estado de pago.
 /** Estados del Excel del dueño. 'cancelado' es nuestro, para no borrar filas. */
-const ORDER_STATUSES = "'pagado','pendiente_pago','pendiente_entrega','entregado','cortesia','cancelado'";
+const ORDER_STATUSES = "'pagado','pendiente_pago','cortesia','cancelado'";
 
-/** Mapeo del enum viejo (estilo e-commerce) al vocabulario del Excel. */
+// QA-16: mapa histórico actualizado — 'entregado'/'pendiente_entrega' ya no
+// existen en el enum final. Estas DBs legadas (enum estilo e-commerce) eran
+// solo de desarrollo, así que se mapean directo al enum final sin distinguir
+// pago/entrega: delivered/shipped/confirmed/preparing → 'pagado' (ya se dio
+// por completada la venta), pending → 'pendiente_pago', cancelled → 'cancelado'.
 const STATUS_MAP_SQL = `
   CASE status
     WHEN 'pending'   THEN 'pendiente_pago'
-    WHEN 'confirmed' THEN 'pendiente_entrega'
-    WHEN 'preparing' THEN 'pendiente_entrega'
-    WHEN 'shipped'   THEN 'pendiente_entrega'
-    WHEN 'delivered' THEN 'entregado'
+    WHEN 'confirmed' THEN 'pagado'
+    WHEN 'preparing' THEN 'pagado'
+    WHEN 'shipped'   THEN 'pagado'
+    WHEN 'delivered' THEN 'pagado'
     WHEN 'cancelled' THEN 'cancelado'
     ELSE status
   END`;
@@ -45,6 +51,8 @@ const ORDERS_FINAL_SQL = `
     quantity_hallacas INTEGER NOT NULL DEFAULT 0,
     payment_method    TEXT CHECK(payment_method IN ('cuenta_vista','efectivo') OR payment_method IS NULL),
     source            TEXT NOT NULL DEFAULT 'web' CHECK(source IN ('web', 'admin')),
+    delivered_at      TEXT,
+    batch_id          INTEGER REFERENCES production_batches(id) ON DELETE SET NULL,
     created_at        TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
   );`;
@@ -139,6 +147,134 @@ function migrateOrdersStatusEnum(db) {
     `);
   });
   console.log('✓ orders.status migrado.');
+}
+
+/* ---- production_batches: QA-16, tandas de producción (eventos, no contador) ---- */
+function createProductionBatchesTable(db) {
+  // QA-16: producción por tandas/lotes — eventos de producción con su propia
+  // info (fecha, cantidad, costo). ADR-3 (plan 09): tabla de COSTOS solamente,
+  // el stock NO se deriva de acá (vive en stock_movements, invariante I-1).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS production_batches (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      produced_at    TEXT NOT NULL DEFAULT (date('now','localtime')),
+      quantity       INTEGER NOT NULL CHECK(quantity > 0),
+      cost_total_clp INTEGER NOT NULL DEFAULT 0,
+      notes          TEXT,
+      created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+}
+
+/* ---- stock_movements: ADR-3 (plan 09), el stock como dato propio ---- */
+function createStockMovementsTable(db) {
+  const exists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'stock_movements'"
+  ).get();
+  if (exists) return;
+
+  console.log('→ Creando tabla stock_movements (ADR-3, plan 09)...');
+  // ADR-3: el stock deja de derivarse de production_batches y pasa a vivir en
+  // su propia tabla de movimientos. Nace VACÍA a propósito: no se migran las
+  // tandas existentes a movimientos (en local se parte de 0; en producción
+  // production_batches queda vacía tras el wipe D-0). Si hiciera falta un
+  // punto de partida, la vía correcta es un ingreso manual con motivo
+  // "Saldo inicial de temporada", no una migración automática.
+  //
+  // batch_ref sin FOREIGN KEY es intencional (invariante I-1): borrar o editar
+  // una tanda no puede alcanzar al stock. No "arreglarlo" con ON DELETE CASCADE.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS stock_movements (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      occurred_at TEXT    NOT NULL DEFAULT (date('now','localtime')),
+      delta       INTEGER NOT NULL CHECK(delta <> 0),
+      reason      TEXT    NOT NULL CHECK(length(trim(reason)) >= 3),
+      kind        TEXT    NOT NULL DEFAULT 'ajuste' CHECK(kind IN ('ajuste','tanda')),
+      batch_ref   INTEGER,
+      created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_stock_movements_fecha ON stock_movements(occurred_at DESC, id DESC);
+  `);
+  console.log('✓ Tabla stock_movements creada.');
+}
+
+/* ---- orders: columna delivered_at (QA-16, la entrega deja de ser un status) ---- */
+function addOrdersDeliveredAtColumn(db) {
+  const cols = tableColumns(db, 'orders');
+  if (cols.some((c) => c.name === 'delivered_at')) return;
+
+  console.log('→ Agregando columna orders.delivered_at (entrega, QA-16)...');
+  // QA-16: la entrega deja de ser un estado y pasa a ser su propia columna
+  db.exec('ALTER TABLE orders ADD COLUMN delivered_at TEXT');
+  console.log('✓ Columna orders.delivered_at agregada.');
+}
+
+/* ---- orders: columna batch_id (QA-16/ADR-2, atribución de venta a tanda) ---- */
+function addOrdersBatchIdColumn(db) {
+  const cols = tableColumns(db, 'orders');
+  if (cols.some((c) => c.name === 'batch_id')) return;
+
+  console.log('→ Agregando columna orders.batch_id (tanda de la venta, QA-16)...');
+  // QA-16/ADR-2: tanda a la que se atribuye la venta (informes por tanda).
+  // Se asigna en el INSERT a la tanda vigente; NULL si no había tandas.
+  db.exec('ALTER TABLE orders ADD COLUMN batch_id INTEGER REFERENCES production_batches(id) ON DELETE SET NULL');
+  console.log('✓ Columna orders.batch_id agregada.');
+}
+
+/* ---- orders: columna stock_exempt (H-2 auditoría 10, ADR-3) ---- */
+function addOrdersStockExemptColumn(db) {
+  const cols = tableColumns(db, 'orders');
+  if (cols.some((c) => c.name === 'stock_exempt')) return;
+
+  console.log('→ Agregando columna orders.stock_exempt (encargos fuera del stock, H-2)...');
+  // H-2/ADR-3: pedidos sólo por encargo no descuentan del stock. Los pedidos
+  // históricos quedan en 0 (comportamiento anterior: descontaban), que es lo
+  // correcto — sólo los encargos nuevos nacen exentos.
+  db.exec('ALTER TABLE orders ADD COLUMN stock_exempt INTEGER NOT NULL DEFAULT 0');
+  console.log('✓ Columna orders.stock_exempt agregada.');
+}
+
+/* ---- orders: swap final del enum de status (QA-16, sacar entregado/pendiente_entrega) ---- */
+function migrateOrdersFinalStatusEnum(db) {
+  // El CHECK no se puede leer por PRAGMA; lo detectamos en el SQL de creación.
+  if (!tableSql(db, 'orders').includes('entregado')) return;
+
+  console.log('→ Migrando orders.status: sacando entregado/pendiente_entrega (QA-16)...');
+  // QA-16: SIN mapeo de datos históricos (decisión de Anthony, 2026-07-15) — la
+  // Fase 0 (wipe de ventas de prueba) dejó orders vacía en producción, así que
+  // el INSERT copia las columnas tal cual. Si hubiera filas con estado viejo
+  // acá, es señal de que el wipe no corrió: detenerse y avisar antes de seguir.
+  const stale = db.prepare(
+    "SELECT COUNT(*) AS n FROM orders WHERE status IN ('entregado','pendiente_entrega')"
+  ).get().n;
+  if (stale > 0) {
+    throw new Error(
+      `migrateOrdersFinalStatusEnum: ${stale} orden(es) con status 'entregado'/'pendiente_entrega'. ` +
+      'El wipe de la Fase 0 (D-0) no corrió sobre esta base. Deteniendo la migración — avisar al arquitecto.'
+    );
+  }
+
+  withTableSwap(db, () => {
+    db.exec(`
+      ${ORDERS_FINAL_SQL}
+
+      INSERT INTO orders_new (
+        id, user_id, customer_name, customer_phone, status, delivery, address,
+        date_hint, notes, total_clp, quantity_hallacas, payment_method, source,
+        delivered_at, batch_id, created_at, updated_at
+      )
+      SELECT id, user_id, customer_name, customer_phone, status, delivery, address,
+             date_hint, notes, total_clp, quantity_hallacas, payment_method, source,
+             delivered_at, batch_id, created_at, updated_at
+      FROM orders;
+
+      DROP TABLE orders;
+      ALTER TABLE orders_new RENAME TO orders;
+      ${ORDERS_TRIGGER_SQL}
+    `);
+  });
+  console.log('✓ orders.status migrado (entregado/pendiente_entrega retirados).');
 }
 
 /* ---- users: login por teléfono (phone UNIQUE, email opcional, address) ---- */
@@ -245,10 +381,19 @@ function seedPacks(db) {
 }
 
 function runMigrations(db) {
+  // Legadas (DBs muy viejas) primero, luego QA-16 (D-1 → D-2 → D-3), luego seeds.
   migrateOrdersLegacy(db);
   addOrdersAddressColumn(db);
   migrateOrdersStatusEnum(db);
   migrateUsersTable(db);
+  createProductionBatchesTable(db);
+  createStockMovementsTable(db);
+  addOrdersDeliveredAtColumn(db);
+  addOrdersBatchIdColumn(db);
+  migrateOrdersFinalStatusEnum(db);
+  // Después del swap final (que recrea orders sin esta columna): puramente
+  // aditiva e independiente del enum de status.
+  addOrdersStockExemptColumn(db);
   seedSettings(db);
   seedPacks(db);
 }

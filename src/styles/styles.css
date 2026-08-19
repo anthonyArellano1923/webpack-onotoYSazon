@@ -166,6 +166,7 @@ a { color: inherit; text-decoration: none; }
   overflow: hidden;
   pointer-events: none;
 }
+/* QA-01: parpadeo en Chromium/Windows por blur(80px) animado re-rasterizando bajo los backdrop-filter — blur eliminado, suavidad horneada en el gradiente + will-change */
 .app__ambient::before,
 .app__ambient::after {
   content: "";
@@ -173,19 +174,19 @@ a { color: inherit; text-decoration: none; }
   width: 60vmax;
   height: 60vmax;
   border-radius: 50%;
-  filter: blur(80px);
   opacity: 0.55;
+  will-change: transform;
   animation: ambient-drift 28s var(--ease-out) infinite alternate;
 }
 .app__ambient::before {
   top: -20vmax;
   left: -10vmax;
-  background: radial-gradient(circle, var(--onoto-xanthous) 0%, transparent 60%);
+  background: radial-gradient(circle, var(--onoto-xanthous) 0%, color-mix(in oklab, var(--onoto-xanthous) 50%, transparent) 30%, transparent 70%);
 }
 .app__ambient::after {
   bottom: -25vmax;
   right: -15vmax;
-  background: radial-gradient(circle, var(--onoto-green) 0%, transparent 60%);
+  background: radial-gradient(circle, var(--onoto-green) 0%, color-mix(in oklab, var(--onoto-green) 50%, transparent) 30%, transparent 70%);
   animation-delay: -12s;
 }
 [data-theme="dark"] .app__ambient::before { opacity: 0.30; }
@@ -1139,6 +1140,34 @@ a { color: inherit; text-decoration: none; }
   display: block;
 }
 
+.stock-alert {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--onoto-crimson) 35%, var(--line));
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--onoto-crimson) 8%, var(--surface-tint));
+  color: var(--fg-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.stock-alert strong { color: var(--fg); }
+.stock-alert a {
+  color: var(--onoto-crimson);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+[data-theme="dark"] .stock-alert a { color: var(--onoto-xanthous); }
+
+.order-transition__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+  justify-content: center;
+}
+.order-transition__actions .btn { flex: 1 1 150px; }
+
 /* ============================================
    TRADITION
    ============================================ */
@@ -1495,7 +1524,11 @@ a { color: inherit; text-decoration: none; }
 
 /* ============ Pack agotado ============ */
 .menu-card--soldout .menu-card__media-img { filter: grayscale(0.9) brightness(0.7); }
-.menu-card--soldout .menu-card__price { color: var(--fg-muted); }
+/* QA-07: "Agotado" ilegible en light mode — --fg-muted es gris medio y este texto vive sobre foto oscurecida, no sobre el fondo de la página; blanco atenuado + sombra sí funciona en ambos temas */
+.menu-card--soldout .menu-card__price {
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+}
 
 /* ============ Panel de administración ============ */
 .admin-panel {

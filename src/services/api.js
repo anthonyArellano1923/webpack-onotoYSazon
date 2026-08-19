@@ -37,7 +37,11 @@ export const adminCreateSale = (body) =>
   apiFetch('/admin/orders', { method: 'POST', body: JSON.stringify(body) });
 export const adminUpdateOrder = (id, body) =>
   apiFetch(`/admin/orders/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+// QA-12: borrado físico de venta.
+export const adminDeleteOrder = (id) => apiFetch(`/admin/orders/${id}`, { method: 'DELETE' });
 export const adminGetUsers = () => apiFetch('/admin/users');
+// QA-12 (ampliado): borrado físico de usuario (403 si es admin, lo maneja el backend).
+export const adminDeleteUser = (id) => apiFetch(`/admin/users/${id}`, { method: 'DELETE' });
 export const adminGetPacks = () => apiFetch('/admin/packs');
 export const adminUpdatePack = (id, body) =>
   apiFetch(`/admin/packs/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
@@ -45,6 +49,20 @@ export const adminGetSettings = () => apiFetch('/admin/settings');
 export const adminUpdateSettings = (body) =>
   apiFetch('/admin/settings', { method: 'PATCH', body: JSON.stringify(body) });
 export const adminGetReports = () => apiFetch('/admin/reports');
+// QA-16: lotes de producción (ADR-2 — eventos históricos, divisor de ventas).
+export const adminGetBatches = () => apiFetch('/admin/batches');
+export const adminCreateBatch = (body) =>
+  apiFetch('/admin/batches', { method: 'POST', body: JSON.stringify(body) });
+export const adminUpdateBatch = (id, body) =>
+  apiFetch(`/admin/batches/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+export const adminDeleteBatch = (id) => apiFetch(`/admin/batches/${id}`, { method: 'DELETE' });
+// ADR-3 (plan 09): el stock es un dato propio (movimientos), no una fórmula
+// sobre las tandas. El kardex mezcla movimientos y ventas vivas por fecha.
+export const adminGetKardex = () => apiFetch('/admin/stock/kardex');
+export const adminCreateMovement = (body) =>
+  apiFetch('/admin/stock/movements', { method: 'POST', body: JSON.stringify(body) });
+export const adminDeleteMovement = (id) =>
+  apiFetch(`/admin/stock/movements/${id}`, { method: 'DELETE' });
 
 // Gestión del estado de autenticación en localStorage
 export function saveAuth(accessToken, user) {

@@ -17,12 +17,35 @@ import {
 import socials, { WHATSAPP_URL, WHATSAPP_PHONE } from '../data/socials';
 import { normalizePhone, phoneToDigits } from '../utils/phone';
 import SANTIAGO_COMUNAS from '../data/comunas';
+import ingredients from '../data/ingredients';
 import OrderTransition from './OrderTransition';
 
 const formatCLP = (n) => {
   if (n == null) return "—";
   return new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(n);
 };
+
+const stockIsKnown = (stockAvailable) => Number.isFinite(stockAvailable);
+
+function StockLimitNotice({ stockAvailable, hallacasRequested, id, detail }) {
+  const exceedsStock = stockIsKnown(stockAvailable) && hallacasRequested > stockAvailable;
+  const title = exceedsStock
+    ? 'El pedido supera el stock.'
+    : (detail ? 'Stock limitado.' : 'No queda espacio para sumar otro pack.');
+  const message = detail || (exceedsStock
+    ? `El pedido suma ${hallacasRequested} hallacas y hay ${stockAvailable} disponibles.`
+    : `El pedido actual suma ${hallacasRequested} hallacas; otro pack superaría las ${stockAvailable} disponibles.`);
+  return (
+    <div className="stock-alert" id={id} role="status" aria-live="polite">
+      <strong>{title}</strong>{' '}
+      {message}{' '}
+      {exceedsStock ? 'Ajusta las cantidades o ' : 'Puedes continuar con el pedido actual o '}
+      <a href={WHATSAPP_URL} target="_blank" rel="noopener noreferrer">
+        {exceedsStock ? 'consulta la próxima tanda' : 'consultar la próxima tanda'}
+      </a>.
+    </div>
+  );
+}
 
 /* ---------- Placeholder ---------- */
 function Placeholder({ variant, label }) {
@@ -110,11 +133,12 @@ function Hero({ onShopClick }) {
             src={imgHeroMobile}
             alt="Hallacas venezolanas Onoto y Sazón"
             className="hero__media-img"
-            fetchpriority="high"
+            fetchPriority="high"
             decoding="sync"
           />
         </picture>
       </div>
+      {/* QA-02: texto editable — ver docs/CONTENIDO_EDITABLE.md */}
       <span className="hero__eyebrow">
         <span className="hero__eyebrow-dot" aria-hidden="true"></span>
         Pedidos abiertos · Diciembre 2025
@@ -152,7 +176,7 @@ function Hero({ onShopClick }) {
 }
 
 /* ---------- Menu Card ---------- */
-function MenuCard({ pack, onOpen, onAdd, isFav, onToggleFav }) {
+function MenuCard({ pack, onOpen, onAdd, isFav, onToggleFav, stockBlocked }) {
   // `available === false` viene de la API (apagado a mano o sin stock);
   // los packs del fallback estático no traen el flag ⇒ se muestran disponibles.
   const soldOut = pack.available === false;
@@ -193,11 +217,17 @@ function MenuCard({ pack, onOpen, onAdd, isFav, onToggleFav }) {
             <div className="menu-card__price">
               {soldOut ? "Agotado" : (pack.price ? formatCLP(pack.price) : "Consulta")}
             </div>
-            {pack.price != null && !soldOut &&
+            {pack.price != null &&
             <button
               className="menu-card__add"
               onClick={handleAdd}
-              aria-label={`Añadir ${pack.name} al carrito`}>
+              disabled={soldOut || stockBlocked}
+              aria-describedby={stockBlocked ? 'menu-stock-alert' : undefined}
+              aria-label={soldOut
+                ? `${pack.name}: agotado`
+                : stockBlocked
+                ? `${pack.name}: el pack supera el stock disponible`
+                : `Añadir ${pack.name} al carrito`}>
 
                 <IconPlus size={20} />
               </button>
@@ -210,7 +240,11 @@ function MenuCard({ pack, onOpen, onAdd, isFav, onToggleFav }) {
 }
 
 /* ---------- Menu Section ---------- */
-function MenuSection({ packs, onOpenPack, onAddToCart, favs, onToggleFav }) {
+function MenuSection({ packs, onOpenPack, onAddToCart, favs, onToggleFav, stockAvailable, cartHallacas }) {
+  const hasBlockedPack = stockIsKnown(stockAvailable) && packs.some((pack) => (
+    pack.price != null
+    && cartHallacas + pack.qty > stockAvailable
+  ));
   return (
     <section className="section menu" id="menu" data-screen-label="02 Menú">
       <div className="section__inner">
@@ -223,6 +257,14 @@ function MenuSection({ packs, onOpenPack, onAddToCart, favs, onToggleFav }) {
             Desde una probadita para conocer el sabor, hasta tu cena familiar de diciembre lista para servir.
           </p>
         </header>
+        {hasBlockedPack && (
+          <StockLimitNotice
+            id="menu-stock-alert"
+            stockAvailable={stockAvailable}
+            hallacasRequested={cartHallacas}
+            detail={`Algunos packs superan las ${stockAvailable} hallacas disponibles.`}
+          />
+        )}
         <div className="menu__grid">
           {packs.map((p) =>
           <MenuCard
@@ -231,7 +273,10 @@ function MenuSection({ packs, onOpenPack, onAddToCart, favs, onToggleFav }) {
             onOpen={onOpenPack}
             onAdd={onAddToCart}
             isFav={favs.includes(p.id)}
-            onToggleFav={onToggleFav} />
+            onToggleFav={onToggleFav}
+            stockBlocked={stockIsKnown(stockAvailable)
+              && p.price != null
+              && cartHallacas + p.qty > stockAvailable} />
 
           )}
         </div>
@@ -241,7 +286,7 @@ function MenuSection({ packs, onOpenPack, onAddToCart, favs, onToggleFav }) {
 }
 
 /* ---------- Pack Detail Modal ---------- */
-function PackModal({ pack, user, onClose, onAdd, onOpenAuth }) {
+function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, cartHallacas }) {
   const [qty, setQty] = useState(1);
   const [customQty, setCustomQty] = useState('');
   const [name, setName] = useState(user?.name || '');
@@ -252,6 +297,7 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth }) {
   const [comuna, setComuna] = useState('');
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(null);
+  const submittingRef = useRef(false);
 
   useEffect(() => {
     setQty(1);
@@ -264,6 +310,7 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth }) {
     setComuna('');
     setNotes('');
     setSubmitting(null);
+    submittingRef.current = false;
   }, [pack?.id]);
 
   if (!pack) return null;
@@ -271,17 +318,31 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth }) {
   const isCustom = pack.price == null;
   const soldOut = pack.available === false;
   const total = isCustom ? null : pack.price * qty;
+  const selectionHallacas = isCustom ? 0 : pack.qty * qty;
+  const selectionExceedsStock = !isCustom
+    && stockIsKnown(stockAvailable)
+    && cartHallacas + selectionHallacas > stockAvailable;
+  const incrementExceedsStock = !isCustom
+    && stockIsKnown(stockAvailable)
+    && cartHallacas + pack.qty * (qty + 1) > stockAvailable;
 
   const dec = () => setQty((q) => Math.max(1, q - 1));
-  const inc = () => setQty((q) => Math.min(99, q + 1));
-  const add = () => {onAdd(pack, qty);onClose();};
+  const inc = () => {
+    if (soldOut || incrementExceedsStock) return;
+    setQty((q) => Math.min(99, q + 1));
+  };
+  const add = () => {
+    if (onAdd(pack, qty) !== false) onClose();
+  };
 
   // --- Pedido grande a medida (packs "por encargo", sin precio fijo) ---
   const normalizedPhone = normalizePhone(phone);
   const matchedComuna = SANTIAGO_COMUNAS.find((c) => c.toLowerCase() === comuna.trim().toLowerCase());
   const addressComplete = delivery !== 'despacho' || (street.trim() && streetNumber.trim() && matchedComuna);
   const customQtyNum = parseInt(customQty, 10);
-  const customQtyValid = Number.isInteger(customQtyNum) && customQtyNum > 0;
+  // QA-15 (prevención): tope de 1000 en el pedido por encargo — sin tope, una
+  // cantidad absurda envenena el stock comprometido para siempre.
+  const customQtyValid = Number.isInteger(customQtyNum) && customQtyNum > 0 && customQtyNum <= 1000;
   const canSubmitCustom = customQtyValid && name.trim() && normalizedPhone && addressComplete;
   const customAddress = delivery === 'despacho' && addressComplete
     ? `${street.trim()} ${streetNumber.trim()}, ${matchedComuna}`
@@ -302,7 +363,8 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth }) {
   };
 
   function handleCustomSubmit() {
-    if (!canSubmitCustom) return;
+    if (!canSubmitCustom || submittingRef.current) return;
+    submittingRef.current = true;
     const waUrl = `https://wa.me/${WHATSAPP_PHONE}?text=${encodeURIComponent(buildCustomMessage())}`;
     // Misma estrategia que el carrito: abrir la pestaña en el clic (sin
     // noopener, para conservar la referencia) y navegarla cuando esté listo.
@@ -329,8 +391,13 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth }) {
         waTab={submitting.waTab}
         waUrl={submitting.waUrl}
         placeOrderPromise={submitting.placeOrderPromise}
+        user={user}
         onClose={onClose}
-        onOpenAuth={() => { onClose?.(); onOpenAuth?.(); }}
+        onAdjust={() => {
+          submittingRef.current = false;
+          setSubmitting(null);
+        }}
+        onOpenAuth={() => { onClose?.(); onOpenAuth?.('register'); }}
       />);
 
   }
@@ -379,7 +446,12 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth }) {
                   <IconMinus size={14} />
                 </button>
                 <span className="qty__value" aria-live="polite">{qty}</span>
-                <button className="qty__btn" onClick={inc} aria-label="Aumentar">
+                <button
+                  className="qty__btn"
+                  onClick={inc}
+                  disabled={soldOut || incrementExceedsStock || qty >= 99}
+                  aria-describedby={incrementExceedsStock ? 'pack-stock-alert' : undefined}
+                  aria-label={incrementExceedsStock ? 'No se puede aumentar: stock máximo alcanzado' : 'Aumentar'}>
                   <IconPlus size={14} />
                 </button>
               </div>
@@ -392,12 +464,17 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth }) {
                   className="form-input"
                   type="number"
                   min="1"
+                  max="1000"
                   step="1"
                   inputMode="numeric"
                   value={customQty}
                   onChange={(e) => setCustomQty(e.target.value)}
                   placeholder="Ej: 25" />
-
+                {customQtyNum > 1000 &&
+              <p role="alert" style={{ margin: "6px 0 0", fontSize: 12.5, color: "var(--onoto-crimson, #880D1E)" }}>
+                    Para pedidos de más de 1000 hallacas escríbenos directo por WhatsApp.
+                  </p>
+              }
               </Field>
               <Field label="Nombre" id="custom-name">
                 <input id="custom-name" className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="¿Cómo te llamas?" />
@@ -455,6 +532,13 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth }) {
               </Field>
             </div>
           }
+          {(selectionExceedsStock || incrementExceedsStock) && (
+            <StockLimitNotice
+              id="pack-stock-alert"
+              stockAvailable={stockAvailable}
+              hallacasRequested={cartHallacas + selectionHallacas}
+            />
+          )}
         </div>
         <div className="modal__footer">
           {!isCustom ?
@@ -464,8 +548,9 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth }) {
                 <span className="modal__total-value">{soldOut ? "Agotado" : formatCLP(total)}</span>
               </div>
               <button className="btn btn--primary modal__cta" onClick={add}
-                disabled={soldOut} style={{ opacity: soldOut ? 0.5 : 1 }}>
-                {soldOut ? "Agotado" : "Añadir al carrito"}
+                disabled={soldOut || selectionExceedsStock}
+                style={{ opacity: (soldOut || selectionExceedsStock) ? 0.5 : 1 }}>
+                {soldOut ? "Agotado" : (selectionExceedsStock ? "Ajusta la cantidad" : "Añadir al carrito")}
               </button>
             </> :
 
@@ -560,7 +645,10 @@ function AddressFields({ idPrefix, street, setStreet, streetNumber, setStreetNum
 }
 
 /* ---------- Cart Modal ---------- */
-function CartModal({ items, packs, user, onClose, onChangeQty, onRemove, onOrderSuccess, onOpenAuth }) {
+function CartModal({
+  items, packs, user, onClose, onChangeQty, onRemove, onOrderSuccess, onOrderFailure, onOpenAuth,
+  stockAvailable, cartHallacas, stockExceeded,
+}) {
   const [name, setName] = useState(user?.name || '');
   const [phone, setPhone] = useState(user?.phone ? phoneToDigits(user.phone) : '');
   const [delivery, setDelivery] = useState('retiro');
@@ -569,6 +657,7 @@ function CartModal({ items, packs, user, onClose, onChangeQty, onRemove, onOrder
   const [comuna, setComuna] = useState('');
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(null);
+  const submittingRef = useRef(false);
 
   const total = items.reduce((s, it) => {
     const p = packs.find((x) => x.id === it.id);
@@ -580,7 +669,11 @@ function CartModal({ items, packs, user, onClose, onChangeQty, onRemove, onOrder
   // una de la lista (búsqueda vía <datalist>, sin distinguir mayúsculas).
   const matchedComuna = SANTIAGO_COMUNAS.find((c) => c.toLowerCase() === comuna.trim().toLowerCase());
   const addressComplete = delivery !== 'despacho' || (street.trim() && streetNumber.trim() && matchedComuna);
-  const canSubmit = items.length > 0 && name.trim() && normalizedPhone && addressComplete;
+  const hasBlockedIncrement = stockIsKnown(stockAvailable) && items.some((item) => {
+    const pack = packs.find((candidate) => candidate.id === item.id);
+    return pack?.price != null && cartHallacas + pack.qty > stockAvailable;
+  });
+  const canSubmit = items.length > 0 && name.trim() && normalizedPhone && addressComplete && !stockExceeded;
   const address = delivery === 'despacho' && addressComplete
     ? `${street.trim()} ${streetNumber.trim()}, ${matchedComuna}`
     : null;
@@ -604,7 +697,8 @@ function CartModal({ items, packs, user, onClose, onChangeQty, onRemove, onOrder
   };
 
   function handlePedir() {
-    if (!canSubmit) return;
+    if (!canSubmit || submittingRef.current) return;
+    submittingRef.current = true;
     const waUrl = `https://wa.me/${WHATSAPP_PHONE}?text=${encodeURIComponent(buildMessage())}`;
     // Abrimos la pestaña ACÁ, en el manejador sincrónico del clic: si se abre
     // después de un `await` deja de ser resultado directo del gesto del
@@ -632,7 +726,14 @@ function CartModal({ items, packs, user, onClose, onChangeQty, onRemove, onOrder
         return s + (p?.qty || 0) * it.qty;
       }, 0),
     });
-    onOrderSuccess?.();
+    // H-1 (auditoría 10): el carrito se vacía SOLO si el pedido se guardó. Si el
+    // backend lo rechaza (p. ej. sin stock suficiente, ADR-3), el cliente
+    // conserva su selección para poder ajustarla. El `() => {}` es a propósito:
+    // el error se muestra en OrderTransition, acá solo evitamos vaciar.
+    placeOrderPromise.then(
+      () => onOrderSuccess?.(),
+      () => onOrderFailure?.(),
+    );
     setSubmitting({ waTab, waUrl, placeOrderPromise });
   }
 
@@ -642,8 +743,13 @@ function CartModal({ items, packs, user, onClose, onChangeQty, onRemove, onOrder
         waTab={submitting.waTab}
         waUrl={submitting.waUrl}
         placeOrderPromise={submitting.placeOrderPromise}
+        user={user}
         onClose={onClose}
-        onOpenAuth={() => { onClose?.(); onOpenAuth?.(); }}
+        onAdjust={() => {
+          submittingRef.current = false;
+          setSubmitting(null);
+        }}
+        onOpenAuth={() => { onClose?.(); onOpenAuth?.('register'); }}
       />);
 
   }
@@ -673,6 +779,8 @@ function CartModal({ items, packs, user, onClose, onChangeQty, onRemove, onOrder
               {items.map((it) => {
               const p = packs.find((x) => x.id === it.id);
               if (!p) return null;
+              const stockBlocksIncrement = stockIsKnown(stockAvailable)
+                && cartHallacas + p.qty > stockAvailable;
               return (
                 <div key={it.id} className="cart-item">
                     <div className="cart-item__thumb">
@@ -686,7 +794,19 @@ function CartModal({ items, packs, user, onClose, onChangeQty, onRemove, onOrder
                           <IconMinus size={12} />
                         </button>
                         <span className="qty__value" style={{ fontSize: 16, minWidth: 24 }}>{it.qty}</span>
-                        <button className="qty__btn" style={{ width: 28, height: 28 }} onClick={() => onChangeQty(it.id, it.qty + 1)} aria-label="Más">
+                        <button
+                          className="qty__btn"
+                          style={{ width: 28, height: 28 }}
+                          onClick={() => onChangeQty(it.id, it.qty + 1)}
+                          disabled={p.available === false || stockBlocksIncrement || it.qty >= 99}
+                          aria-describedby={stockBlocksIncrement ? 'cart-stock-alert' : undefined}
+                          aria-label={it.qty >= 99
+                            ? `No se puede aumentar ${p.name}: máximo de 99 packs alcanzado`
+                            : p.available === false
+                            ? `No se puede aumentar ${p.name}: agotado`
+                            : stockBlocksIncrement
+                            ? `No se puede aumentar ${p.name}: stock máximo alcanzado`
+                            : `Aumentar ${p.name}`}>
                           <IconPlus size={12} />
                         </button>
                       </div>
@@ -702,6 +822,13 @@ function CartModal({ items, packs, user, onClose, onChangeQty, onRemove, onOrder
             })}
             </div>
           }
+          {items.length > 0 && (stockExceeded || hasBlockedIncrement) && (
+            <StockLimitNotice
+              id="cart-stock-alert"
+              stockAvailable={stockAvailable}
+              hallacasRequested={cartHallacas}
+            />
+          )}
           {items.length > 0 &&
           <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 20 }}>
               <Field label="Nombre" id="cart-name">
@@ -773,7 +900,7 @@ function CartModal({ items, packs, user, onClose, onChangeQty, onRemove, onOrder
               disabled={!canSubmit}
               style={{ opacity: canSubmit ? 1 : 0.5 }}
             >
-              <IconWhatsapp size={16} /> Pedir
+              <IconWhatsapp size={16} /> {stockExceeded ? 'Ajusta el pedido' : 'Pedir'}
             </button>
           </div>
         }
@@ -828,16 +955,16 @@ function Tradition() {
                 En <em>Onoto y Sazón</em> cocinamos para que tu mesa en Santiago tenga, aunque sea por una noche, el sabor del país que llevas adentro. Para que tus hijos prueben lo que tú probabas, y tus amigos chilenos entiendan de qué hablas cuando dices "diciembre".
               </p>
             </div>
+            {/* QA-06: chips generados desde src/data/ingredients.js para ampliar la lista sin tocar JSX */}
             <div className="tradition__ingredients">
-              <span className="tradition__ing-chip tradition__ing-chip--accent">Onoto</span>
-              <span className="tradition__ing-chip">Maíz</span>
-              <span className="tradition__ing-chip">Res</span>
-              <span className="tradition__ing-chip">Cerdo</span>
-              <span className="tradition__ing-chip">Pollo</span>
-              <span className="tradition__ing-chip">Aceitunas</span>
-              <span className="tradition__ing-chip">Alcaparras</span>
-              <span className="tradition__ing-chip">Pasitas</span>
-              <span className="tradition__ing-chip">Hoja de plátano</span>
+              {ingredients.map((ing) => (
+                <span
+                  key={ing.name}
+                  className={`tradition__ing-chip${ing.accent ? ' tradition__ing-chip--accent' : ''}`}
+                >
+                  {ing.name}
+                </span>
+              ))}
             </div>
           </div>
         </div>
@@ -882,6 +1009,7 @@ function Contact() {
             </div>
           </div>
           <div className="contact-info">
+            {/* QA-05: celular de contacto editable — ver docs/CONTENIDO_EDITABLE.md (OJO: el número REAL de los botones de WhatsApp vive en src/data/socials.js) */}
             <div className="contact-info__row">
               <span className="contact-info__icon"><IconPhone /></span>
               <div>
@@ -889,6 +1017,7 @@ function Contact() {
                 <p className="contact-info__value">+56 9 2018 4981</p>
               </div>
             </div>
+            {/* QA-05: dirección de retiro editable — ver docs/CONTENIDO_EDITABLE.md */}
             <div className="contact-info__row">
               <span className="contact-info__icon"><IconMapPin /></span>
               <div>
@@ -896,6 +1025,7 @@ function Contact() {
                 <p className="contact-info__value">Providencia, Santiago</p>
               </div>
             </div>
+            {/* QA-05: anticipación editable — ver docs/CONTENIDO_EDITABLE.md */}
             <div className="contact-info__row">
               <span className="contact-info__icon"><IconClock /></span>
               <div>

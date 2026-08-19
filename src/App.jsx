@@ -3,7 +3,7 @@
  * Orquesta tema, carrito, favoritos, modales y tweaks panel.
  * @module App
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import staticPacks from './data/packs';
 import { WHATSAPP_URL } from './data/socials';
 import { IconCart, IconWhatsapp, IconCheck } from './components/Icons';
@@ -92,39 +92,110 @@ export default function App() {
      desde el admin). packs.js queda como fallback visual si la API no
      responde (sin flag `available` ⇒ todo se muestra disponible). */
   const [packs, setPacks] = useState(staticPacks);
-  useEffect(() => {
-    getPacks()
-      .then((data) => { if (data.packs?.length) setPacks(data.packs); })
+  const [stockAvailable, setStockAvailable] = useState(null);
+  // QA-13: extraído a función reutilizable para poder refrescar el catálogo
+  // desde el panel de admin tras cada guardado (packs, ajustes, ventas).
+  const refreshPacks = useCallback(() => {
+    return getPacks()
+      .then((data) => {
+        if (data.packs?.length) setPacks(data.packs);
+        if (Number.isFinite(data.stock_available)) {
+          setStockAvailable(Math.max(0, Math.trunc(data.stock_available)));
+        }
+      })
       .catch((err) => console.warn('No se pudo cargar el catálogo desde la API, usando fallback:', err.message));
   }, []);
+  useEffect(() => { refreshPacks(); }, [refreshPacks]);
 
   /* Cart */
   const [cart, setCart] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('oys-cart') || '[]'); } catch { return []; }
+    try {
+      const stored = JSON.parse(localStorage.getItem('oys-cart') || '[]');
+      if (!Array.isArray(stored)) return [];
+      return stored
+        .filter((item) => item && typeof item.id === 'string')
+        .map((item) => ({ ...item, qty: Math.trunc(Number(item.qty)) }))
+        .filter((item) => Number.isFinite(item.qty) && item.qty > 0);
+    } catch { return []; }
   });
+  const cartRef = useRef(cart);
+  useEffect(() => { cartRef.current = cart; }, [cart]);
   useEffect(() => { localStorage.setItem('oys-cart', JSON.stringify(cart)); }, [cart]);
 
-  const cartCount = cart.reduce((s, it) => s + it.qty, 0);
+  const cartCount = cart.reduce((s, it) => s + (Number.isFinite(it.qty) ? it.qty : 0), 0);
   const cartTotal = cart.reduce((s, it) => {
     const p = packs.find((x) => x.id === it.id);
-    return s + (p?.price || 0) * it.qty;
+    return s + (p?.price || 0) * (Number.isFinite(it.qty) ? it.qty : 0);
   }, 0);
+  const countCartHallacas = (items) => items.reduce((sum, item) => {
+    const pack = packs.find((candidate) => candidate.id === item.id);
+    if (pack?.price == null || !Number.isFinite(pack.qty) || !Number.isFinite(item.qty)) return sum;
+    return sum + pack.qty * item.qty;
+  }, 0);
+  const cartHallacas = countCartHallacas(cart);
+  const stockKnown = Number.isFinite(stockAvailable);
+  const stockExceeded = stockKnown && cartHallacas > stockAvailable;
+
+  const commitCart = (nextCart) => {
+    cartRef.current = nextCart;
+    setCart(nextCart);
+  };
 
   const addToCart = (pack, qty = 1) => {
-    if (pack.price == null) return;
-    if (pack.available === false) { showToast(`${pack.name} está agotado`); return; }
-    setCart((c) => {
-      const ex = c.find((it) => it.id === pack.id);
-      if (ex) return c.map((it) => (it.id === pack.id ? { ...it, qty: it.qty + qty } : it));
-      return [...c, { id: pack.id, qty }];
-    });
+    const amount = Math.max(1, Math.min(99, Math.trunc(Number(qty) || 1)));
+    if (pack.price == null) return false;
+    if (pack.available === false) { showToast(`${pack.name} está agotado`); return false; }
+    const currentCart = cartRef.current;
+    const projectedHallacas = countCartHallacas(currentCart) + (pack.qty * amount);
+    if (stockKnown && projectedHallacas > stockAvailable) {
+      showToast('Stock máximo alcanzado. Ajusta tu pedido o consulta la próxima tanda.');
+      return false;
+    }
+    const existing = currentCart.find((item) => item.id === pack.id);
+    if (existing && Number(existing.qty) + amount > 99) {
+      showToast(`Puedes añadir hasta 99 packs de ${pack.name}`);
+      return false;
+    }
+    const nextCart = existing
+      ? currentCart.map((item) => (item.id === pack.id ? { ...item, qty: Number(item.qty) + amount } : item))
+      : [...currentCart, { id: pack.id, qty: amount }];
+    commitCart(nextCart);
     showToast(`${pack.name} añadido`);
+    return true;
   };
   const changeQty = (id, qty) => {
-    if (qty <= 0) return setCart((c) => c.filter((it) => it.id !== id));
-    setCart((c) => c.map((it) => (it.id === id ? { ...it, qty: Math.min(99, qty) } : it)));
+    const currentCart = cartRef.current;
+    const currentItem = currentCart.find((item) => item.id === id);
+    if (!currentItem) return false;
+    const requestedQty = Math.trunc(Number(qty));
+    if (!Number.isFinite(requestedQty)) return false;
+    if (requestedQty <= 0) {
+      commitCart(currentCart.filter((item) => item.id !== id));
+      return true;
+    }
+
+    // Una selección persistida puede haber quedado sobre el stock actual. En
+    // ese caso siempre permitimos disminuir; sólo bloqueamos incrementos.
+    if (requestedQty > currentItem.qty && currentItem.qty >= 99) return false;
+    const nextQty = requestedQty > currentItem.qty ? Math.min(99, requestedQty) : requestedQty;
+    const pack = packs.find((candidate) => candidate.id === id);
+    if (nextQty > currentItem.qty && pack?.available === false) {
+      showToast(`${pack.name} está agotado`);
+      return false;
+    }
+    if (nextQty > currentItem.qty && pack?.price != null && stockKnown) {
+      const projectedHallacas = countCartHallacas(currentCart)
+        + (nextQty - currentItem.qty) * pack.qty;
+      if (projectedHallacas > stockAvailable) {
+        showToast('Stock máximo alcanzado. Ajusta tu pedido o consulta la próxima tanda.');
+        return false;
+      }
+    }
+    commitCart(currentCart.map((item) => (item.id === id ? { ...item, qty: nextQty } : item)));
+    return true;
   };
-  const removeFromCart = (id) => setCart((c) => c.filter((it) => it.id !== id));
+  const removeFromCart = (id) => commitCart(cartRef.current.filter((item) => item.id !== id));
+  const clearCart = () => commitCart([]);
 
   /* Favorites */
   const [favs, setFavs] = useState(() => {
@@ -135,9 +206,15 @@ export default function App() {
 
   /* Auth */
   const [user, setUser] = useState(() => getStoredUser());
-  const [authModalOpen, setAuthModalOpen] = useState(false);
+  // QA-04: null | 'login' | 'register' — reemplaza el booleano para poder
+  // pedir una pestaña específica al abrir el modal.
+  const [authModal, setAuthModal] = useState(null);
+  const openAuth = (tabName = 'login') => setAuthModal(tabName);
 
   const handleLogout = () => {
+    // QA-03: confirmación antes de cerrar sesión — el botón del nav ejecutaba
+    // el logout al primer clic, sin fricción.
+    if (!window.confirm(`¿Cerrar la sesión de ${user?.name}?`)) return;
     clearAuth();
     setUser(null);
     showToast('Sesión cerrada');
@@ -149,21 +226,21 @@ export default function App() {
   const [adminOpen, setAdminOpen] = useState(false);
 
   useEffect(() => {
-    const anyOpen = openPack || cartOpen || authModalOpen;
+    const anyOpen = openPack || cartOpen || authModal;
     document.body.style.overflow = anyOpen ? 'hidden' : '';
     return () => { document.body.style.overflow = ''; };
-  }, [openPack, cartOpen, authModalOpen]);
+  }, [openPack, cartOpen, authModal]);
 
   useEffect(() => {
     const onKey = (e) => {
       if (e.key !== 'Escape') return;
-      if (authModalOpen) setAuthModalOpen(false);
+      if (authModal) setAuthModal(null);
       else if (cartOpen) setCartOpen(false);
       else if (openPack) setOpenPack(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [openPack, cartOpen, authModalOpen]);
+  }, [openPack, cartOpen, authModal]);
 
   /* Toast */
   const [toast, setToast] = useState({ visible: false, msg: '' });
@@ -183,7 +260,7 @@ export default function App() {
 
       <Nav cartCount={cartCount} onOpenCart={() => setCartOpen(true)}
            theme={theme} onToggleTheme={handleToggleTheme} activeSection={activeSection}
-           user={user} onOpenAuth={() => setAuthModalOpen(true)} onLogout={handleLogout}
+           user={user} onOpenAuth={() => openAuth('login')} onLogout={handleLogout}
            onOpenAdmin={() => setAdminOpen(true)} />
 
       <main>
@@ -191,7 +268,8 @@ export default function App() {
           document.getElementById('menu')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }} />
         <div className="reveal"><MenuSection packs={packs} onOpenPack={setOpenPack}
-          onAddToCart={addToCart} favs={favs} onToggleFav={toggleFav} /></div>
+          onAddToCart={addToCart} favs={favs} onToggleFav={toggleFav}
+          stockAvailable={stockAvailable} cartHallacas={cartHallacas} /></div>
         <div className="reveal"><Tradition /></div>
         <div className="reveal"><Contact /></div>
       </main>
@@ -224,21 +302,24 @@ export default function App() {
 
       {/* Modals */}
       {openPack && <PackModal pack={openPack} user={user} onClose={() => setOpenPack(null)} onAdd={addToCart}
-        onOpenAuth={() => setAuthModalOpen(true)} />}
+        onOpenAuth={openAuth} stockAvailable={stockAvailable} cartHallacas={cartHallacas} />}
       {cartOpen && <CartModal items={cart} packs={packs} user={user} onClose={() => setCartOpen(false)}
-        onChangeQty={changeQty} onRemove={removeFromCart} onOrderSuccess={() => setCart([])}
-        onOpenAuth={() => setAuthModalOpen(true)} />}
-      {authModalOpen && (
+        onChangeQty={changeQty} onRemove={removeFromCart}
+        onOrderSuccess={() => { clearCart(); refreshPacks(); }} onOrderFailure={refreshPacks}
+        onOpenAuth={openAuth} stockAvailable={stockAvailable} cartHallacas={cartHallacas}
+        stockExceeded={stockExceeded} />}
+      {authModal && (
         <AuthModal
-          onClose={() => setAuthModalOpen(false)}
+          initialTab={authModal}
+          onClose={() => setAuthModal(null)}
           onSuccess={(loggedUser) => {
             setUser(loggedUser);
-            setAuthModalOpen(false);
+            setAuthModal(null);
           }}
         />
       )}
       {adminOpen && user?.role === 'admin' && (
-        <AdminDashboard onClose={() => setAdminOpen(false)} />
+        <AdminDashboard onClose={() => setAdminOpen(false)} onCatalogChange={refreshPacks} />
       )}
 
       {/* Tweaks panel */}

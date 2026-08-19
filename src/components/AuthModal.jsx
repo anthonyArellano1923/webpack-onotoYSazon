@@ -8,8 +8,10 @@ import { IconClose } from './Icons';
  * WhatsApp, no en el correo). El registro pide nombre, teléfono y contraseña;
  * la dirección es opcional y sirve para prellenar el despacho del carrito.
  */
-export default function AuthModal({ onClose, onSuccess }) {
-  const [tab, setTab] = useState('login');
+export default function AuthModal({ onClose, onSuccess, initialTab = 'login' }) {
+  // QA-04: la pestaña inicial es parametrizable — el CTA "Crear cuenta" del
+  // modal de éxito debe aterrizar directo en el registro, no en login.
+  const [tab, setTab] = useState(initialTab);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
