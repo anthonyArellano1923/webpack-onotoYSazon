@@ -1,6 +1,10 @@
 const jwt = require('jsonwebtoken');
 const { db } = require('../database/db');
 
+// PLAN-13: el rol sale de la BD en cada petición, no del JWT; así quitarle el
+// rol a alguien surte efecto de inmediato. Consulta preparada una sola vez.
+const findUser = db.prepare('SELECT id, role FROM users WHERE id = ?');
+
 function requireAuth(req, res, next) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
@@ -14,12 +18,12 @@ function requireAuth(req, res, next) {
     // QA-H2: el borrado de usuarios (QA-12) dejó tokens huérfanos vigentes — check de existencia por request.
     // El JWT es válido hasta expirar (2h) aunque el usuario ya no exista en
     // la BD; sin este check un usuario borrado seguiría "autenticado".
-    const exists = db.prepare('SELECT id FROM users WHERE id = ?').get(payload.sub);
-    if (!exists) {
+    const row = findUser.get(payload.sub);
+    if (!row) {
       return res.status(401).json({ error: 'Sesión inválida. Por favor inicia sesión nuevamente.' });
     }
     // Payload nuevo: { sub, phone, role } (login por teléfono)
-    req.user = { id: payload.sub, phone: payload.phone, role: payload.role };
+    req.user = { id: payload.sub, phone: payload.phone, role: row.role };
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {

@@ -1,6 +1,10 @@
 const jwt = require('jsonwebtoken');
 const { db } = require('../database/db');
 
+// PLAN-13: el rol sale de la BD en cada petición, no del JWT; así quitarle el
+// rol a alguien surte efecto de inmediato. Consulta preparada una sola vez.
+const findUser = db.prepare('SELECT id, role FROM users WHERE id = ?');
+
 /**
  * Como requireAuth, pero nunca bloquea: si hay un Bearer token válido setea
  * req.user, si no lo hay (o es inválido/expiró) sigue sin autenticar. Usado
@@ -20,10 +24,10 @@ function optionalAuth(req, res, next) {
     // setear). Es a propósito — si dejáramos pasar un user_id fantasma,
     // createOrder violaría la FK orders.user_id → users.id y respondería 500
     // en vez de simplemente crear el pedido sin dueño.
-    const exists = db.prepare('SELECT id FROM users WHERE id = ?').get(payload.sub);
-    if (exists) {
+    const row = findUser.get(payload.sub);
+    if (row) {
       // Payload nuevo: { sub, phone, role } (login por teléfono)
-      req.user = { id: payload.sub, phone: payload.phone, role: payload.role };
+      req.user = { id: payload.sub, phone: payload.phone, role: row.role };
     }
   } catch {
     // Token ausente/inválido/expirado: seguimos como pedido anónimo.
