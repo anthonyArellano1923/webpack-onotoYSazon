@@ -436,7 +436,7 @@ function VentasTab({ onCatalogChange, onPendingChange, showStockExemptOnly, onCl
                 </td>
                 <td>{o.source}</td>
                 <td>{o.delivery}{o.address ? ` · ${o.address}` : ''}</td>
-                <td style={{ whiteSpace: 'normal', maxWidth: 220 }}>{o.notes || '—'}</td>
+                <td style={{ whiteSpace: 'normal', maxWidth: 150 }}>{o.notes || '—'}</td>
                 {/* QA-12: borrar venta (errores/pruebas) */}
                 <td>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -1297,7 +1297,7 @@ function PacksTab({ onCatalogChange }) {
               <td>{p.name} <span style={{ color: 'var(--fg-subtle)' }}>({p.qty_label})</span></td>
               <td>{p.qty}</td>
               <td>
-                <input className="form-input" type="number" min="0" step="100" style={{ width: 110 }}
+                <input className="form-input" type="number" min="0" step="100" style={{ width: 140 }}
                   value={prices[p.id]}
                   placeholder="por encargo"
                   onChange={(e) => setPrices((s) => ({ ...s, [p.id]: e.target.value }))} />

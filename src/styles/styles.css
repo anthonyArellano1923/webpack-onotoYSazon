@@ -1595,6 +1595,11 @@ a { color: inherit; text-decoration: none; }
 }
 .admin-table tr:last-child td { border-bottom: 0; }
 .admin-table .form-input { min-height: 34px; padding: 4px 10px; font-size: 13px; }
+/* Selects de Ventas: ancho mínimo en escritorio para no truncar «Pendiente» */
+.admin-table select.form-input { min-width: 150px; padding-right: 28px; }
+/* Estado lleva «Pendiente pago» (la más larga): un poco más ancho que Método */
+@media (min-width: 1025px) { .admin-table td:nth-child(7) select.form-input { min-width: 164px; } .admin-table td:nth-child(6) select.form-input { min-width: 124px; } }
+@media (min-width: 1025px) { .admin-table th, .admin-table td { padding-left: 5px; padding-right: 5px; } }
 .admin-form {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
