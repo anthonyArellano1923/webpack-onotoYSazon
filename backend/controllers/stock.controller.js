@@ -1,6 +1,6 @@
 const { db } = require('../database/db');
 const { getStock, getStockBreakdown } = require('./packs.controller');
-const { esFechaValida } = require('../utils/fecha');
+const { esFechaValida, esFechaFutura, FECHA_FUTURA_MSG } = require('../utils/fecha');
 const { LIVE_ORDER_SQL, COUNTED_MOVEMENT_SQL } = require('../utils/orderState');
 
 /**
@@ -132,6 +132,9 @@ function createMovement(req, res) {
   const fecha = String(occurredAt ?? '').trim() || null;
   if (fecha !== null && !esFechaValida(fecha)) {
     return res.status(400).json({ error: 'Fecha inválida. Usa el formato AAAA-MM-DD.' });
+  }
+  if (fecha !== null && esFechaFutura(fecha)) {
+    return res.status(400).json({ error: FECHA_FUTURA_MSG });
   }
 
   try {

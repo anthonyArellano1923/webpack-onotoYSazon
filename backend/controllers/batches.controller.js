@@ -1,5 +1,5 @@
 const { db } = require('../database/db');
-const { esFechaValida } = require('../utils/fecha');
+const { esFechaValida, esFechaFutura, FECHA_FUTURA_MSG } = require('../utils/fecha');
 const { isMontoClp, MONTO_RANGE_MSG } = require('../utils/limits');
 
 // Tope anti-envenenamiento, alineado con MAX_DELTA de stock.controller y con
@@ -77,6 +77,10 @@ function createBatch(req, res) {
   if (fechaPedida !== null && !esFechaValida(fechaPedida)) {
     return res.status(400).json({ error: 'Fecha inválida. Usa el formato AAAA-MM-DD.' });
   }
+  // STOCK FASE 2: la tanda escribe un ingreso de stock con esta fecha.
+  if (fechaPedida !== null && esFechaFutura(fechaPedida)) {
+    return res.status(400).json({ error: FECHA_FUTURA_MSG });
+  }
 
   // ADR-3: la tanda registra el costo Y empuja su cantidad al stock una vez, en
   // la misma transacción (si algo falla no queda ni tanda ni movimiento). El
@@ -132,6 +136,7 @@ function updateBatch(req, res) {
     // H-3: mismo criterio que createBatch.
     const fecha = String(producedAt ?? '').trim();
     if (!esFechaValida(fecha)) return res.status(400).json({ error: 'Fecha inválida. Usa el formato AAAA-MM-DD.' });
+    if (esFechaFutura(fecha)) return res.status(400).json({ error: FECHA_FUTURA_MSG });
     updates.push('produced_at = ?');
     values.push(fecha);
   }

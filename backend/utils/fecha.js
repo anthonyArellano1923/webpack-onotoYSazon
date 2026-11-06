@@ -23,4 +23,19 @@ function hoyLocal() {
   return new Date().toLocaleDateString('en-CA');
 }
 
-module.exports = { esFechaValida, hoyLocal, FORMATO_FECHA: FORMATO };
+/**
+ * STOCK FASE 2: true when a valid `YYYY-MM-DD` date is after today (local).
+ * Una venta o un movimiento con fecha futura descoloca el kardex (el saldo de
+ * hoy incluiría algo que no pasó), así que se rechazan con 400.
+ * @param {string} valor - Already validated with esFechaValida.
+ * @returns {boolean}
+ */
+function esFechaFutura(valor) {
+  return valor > hoyLocal();
+}
+
+const FECHA_FUTURA_MSG = 'La fecha no puede ser futura.';
+
+module.exports = {
+  esFechaValida, esFechaFutura, hoyLocal, FORMATO_FECHA: FORMATO, FECHA_FUTURA_MSG,
+};

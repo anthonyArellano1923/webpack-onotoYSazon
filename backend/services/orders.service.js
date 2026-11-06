@@ -18,6 +18,7 @@ const { getCurrentBatchId } = require('../controllers/batches.controller');
 const { LIVE_ORDER_SQL } = require('../utils/orderState');
 const { httpError } = require('../utils/httpError');
 const { isMontoClp, MONTO_RANGE_MSG } = require('../utils/limits');
+const { esFechaValida, esFechaFutura, FECHA_FUTURA_MSG } = require('../utils/fecha');
 const { syncOrderLedger, catchUpOrder } = require('./ledger');
 const { recordEvent, recordTransitions } = require('./orderEvents');
 
@@ -73,7 +74,7 @@ function stockInsuficiente(stock, requerido) {
 function createSale(input, opts = {}) {
   const {
     customerName, customerPhone, quantityHallacas, totalClp, paymentMethod, status, notes, delivery,
-    encargo, force,
+    encargo, force, occurredAt,
   } = input || {};
 
   // PLAN-11: tipos estrictos; un número en customerName o notes respondía 500.
@@ -116,6 +117,14 @@ function createSale(input, opts = {}) {
   if (totalClp !== undefined && totalClp !== null && totalClp !== '' && !isMontoClp(totalClp)) {
     throw httpError(400, `Total inválido (${MONTO_RANGE_MSG}).`);
   }
+  // STOCK FASE 2: fecha opcional de la venta (AAAA-MM-DD, hoy por defecto)
+  // para registrar en el panel una venta de días anteriores. Fecha el asiento
+  // del ledger (kardex); nunca futura.
+  if (occurredAt !== undefined && occurredAt !== null && occurredAt !== '') {
+    if (!esFechaValida(occurredAt)) throw httpError(400, 'Fecha inválida. Usa el formato AAAA-MM-DD.');
+    if (esFechaFutura(occurredAt)) throw httpError(400, FECHA_FUTURA_MSG);
+  }
+  const fechaVenta = typeof occurredAt === 'string' && occurredAt ? occurredAt : null;
   const saleStatus = status || 'pendiente_pago';
   if (!VALID_STATUSES.includes(saleStatus)) {
     throw httpError(400, `Estado inválido. Opciones: ${VALID_STATUSES.join(', ')}`);
@@ -168,7 +177,7 @@ function createSale(input, opts = {}) {
     ).lastInsertRowid;
     // STOCK FASE 2: asiento de la venta en el mismo commit (un encargo no
     // reserva, así que no escribe nada hasta concretarse).
-    syncOrderLedger(id);
+    syncOrderLedger(id, { fecha: fechaVenta });
     const actor = opts.actor || 'admin';
     recordEvent(id, 'creado', actor);
     if (saleStatus === 'pagado') recordEvent(id, 'pagado', actor);
