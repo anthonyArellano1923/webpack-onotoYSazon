@@ -94,7 +94,11 @@ test('T12a: migración de esquema anterior confirma los pedidos legados y conser
   assert.equal(before, 35);
 
   const indexes = conn.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all().map((i) => i.name);
-  for (const i of ['idx_orders_phone', 'idx_orders_review', 'idx_order_items_order']) {
+  for (const i of [
+    'idx_orders_phone', 'idx_orders_review', 'idx_order_items_order',
+    // PLAN-13
+    'idx_orders_user', 'idx_orders_batch', 'idx_orders_created', 'idx_stock_movements_created_by',
+  ]) {
     assert.ok(indexes.includes(i), `falta índice ${i}`);
   }
 });

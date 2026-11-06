@@ -337,6 +337,14 @@ function addOrdersReviewColumns(db) {
     CREATE INDEX IF NOT EXISTS idx_orders_phone  ON orders(customer_phone);
     CREATE INDEX IF NOT EXISTS idx_orders_review ON orders(confirmed_at, expires_at);
     CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
+    -- PLAN-13: columnas FK sin índice. user_id: getMyOrders y el SET NULL al
+    -- borrar un usuario; batch_id: el SET NULL al borrar una tanda; created_by
+    -- (stock_movements): el SET NULL al borrar un usuario; created_at: el
+    -- ORDER BY del listado de ventas.
+    CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id);
+    CREATE INDEX IF NOT EXISTS idx_orders_batch ON orders(batch_id);
+    CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at);
+    CREATE INDEX IF NOT EXISTS idx_stock_movements_created_by ON stock_movements(created_by);
   `);
 }
 
