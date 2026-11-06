@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      # better-sqlite3 baja un binario precompilado y, si no existe, compila
+      # con node-gyp (ubuntu-latest trae python3, make y g++).
+      - name: Install
+        working-directory: backend
+        run: npm ci
+      - name: Test
+        working-directory: backend
+        run: npm test
+
+  frontend:
+    name: Frontend (build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install
+        run: npm ci
+      # webpack.config.js exige una API_URL válida (termina en /api); aquí es
+      # un valor de CI, el build real vive en Vercel.
+      - name: Build
+        env:
+          API_URL: https://example.onrender.com/api
+          NODE_ENV: production
+        run: npx webpack --mode production
