@@ -204,7 +204,7 @@ function ResumenTab() {
       <div className="admin-cards">
         {Object.entries(reports.ventas_por_estado).map(([status, n]) => (
           <div key={status} className="admin-card">
-            <p className="admin-card__label">{STATUS_LABELS[status] || status}</p>
+            <p className="admin-card__label">{STATUS_LABELS[status] || { por_confirmar: 'Por confirmar', vencido: 'Vencidos', vencidos: 'Vencidos' }[status] || status}</p>
             <p className="admin-card__value">{n}</p>
           </div>
         ))}

@@ -485,7 +485,7 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, car
                   placeholder="Ej: 25" />
                 {customQtyOver &&
               <div style={{ marginTop: 8 }}>
-                    <ContactSellerNotice id="custom-qty-limit" waUrl={`https://wa.me/${WHATSAPP_PHONE}?text=${encodeURIComponent(buildCustomMessage())}`} />
+                    <ContactSellerNotice id="custom-qty-limit" message="Para un pedido así, ponte en contacto directo con el vendedor." waUrl={`https://wa.me/${WHATSAPP_PHONE}?text=${encodeURIComponent(buildCustomMessage())}`} />
                   </div>
               }
               </Field>
@@ -840,7 +840,7 @@ function CartModal({
             </div>
           }
           {items.length > 0 && limitExceeded && (
-            <ContactSellerNotice id="cart-limit-alert" waUrl={`https://wa.me/${WHATSAPP_PHONE}?text=${encodeURIComponent(buildMessage())}`} />
+            <ContactSellerNotice id="cart-limit-alert" message="Para un pedido así, ponte en contacto directo con el vendedor." waUrl={`https://wa.me/${WHATSAPP_PHONE}?text=${encodeURIComponent(buildMessage())}`} />
           )}
           {items.length > 0 && !limitExceeded && (stockExceeded || hasBlockedIncrement) && (
             <StockLimitNotice
