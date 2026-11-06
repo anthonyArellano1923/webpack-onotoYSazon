@@ -12,6 +12,7 @@ const authRoutes  = require('./routes/auth.routes');
 const orderRoutes = require('./routes/orders.routes');
 const adminRoutes = require('./routes/admin.routes');
 const packsRoutes = require('./routes/packs.routes');
+const telegramRoutes = require('./routes/telegram.routes');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -43,6 +44,10 @@ app.use(express.json({ limit: '10kb' }));
 // llegan con la IP del proxy y los limiters (en especial orderLimiter) tratarían
 // a todos los clientes como uno solo. Debe ir ANTES de los limiters.
 if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY) || 1);
+
+// PLAN-12 (ADR-5): webhook del bot ANTES del limiter. Se autentica con el
+// secreto de setWebhook; un 429 haría que Telegram reintente el update.
+app.use('/api/telegram', telegramRoutes);
 
 // Rate limiting general a toda la API
 app.use('/api', apiLimiter);
