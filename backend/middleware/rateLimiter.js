@@ -24,4 +24,17 @@ const apiLimiter = rateLimit({
   },
 });
 
-module.exports = { authLimiter, apiLimiter };
+// PLAN-11: pedidos web, 10 por hora por IP. Cada pedido reserva stock por
+// horas; sin este tope un script podía vaciar el catálogo con teléfonos
+// inventados. Requiere `trust proxy` en Render para ver la IP real.
+const orderLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Demasiados pedidos desde esta conexión. Intenta de nuevo en una hora o escríbenos por WhatsApp.',
+  },
+});
+
+module.exports = { authLimiter, apiLimiter, orderLimiter };

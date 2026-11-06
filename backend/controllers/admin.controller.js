@@ -2,6 +2,10 @@ const { db } = require('../database/db');
 const { normalizePhone } = require('../utils/phone');
 const { getStock, getStockBreakdown } = require('./packs.controller');
 const { getCurrentBatchId } = require('./batches.controller');
+const {
+  LIVE_ORDER_SQL, PENDING_REVIEW_SQL, EXPIRED_REVIEW_SQL, reviewState,
+} = require('../utils/orderState');
+const { httpError, sendError, parsePositiveId } = require('../utils/httpError');
 
 // Vocabulario del Excel del dueño + 'cancelado' (nuestro, para no borrar filas)
 // QA-16: 'entregado'/'pendiente_entrega' salen del enum — la entrega pasa a
@@ -24,6 +28,7 @@ function getAllOrders(req, res) {
       o.id, o.status, o.delivery, o.address, o.date_hint, o.notes, o.total_clp,
       o.quantity_hallacas, o.payment_method, o.source,
       o.batch_id, o.delivered_at, o.stock_exempt,
+      o.confirmed_at, o.expires_at,
       o.created_at, o.updated_at,
       u.id AS user_id,
       COALESCE(NULLIF(o.customer_name, ''), u.name) AS customer_name,
@@ -54,6 +59,11 @@ function getAllOrders(req, res) {
       batch_id: o.batch_id,
       delivered_at: o.delivered_at,
       stock_exempt: o.stock_exempt,
+      // PLAN-11: el panel arma "Por confirmar" / "Vencidos" con `review`, que
+      // se deriva aquí (D2) para no duplicar la regla en el frontend.
+      confirmed_at: o.confirmed_at,
+      expires_at: o.expires_at,
+      review: reviewState(o),
       created_at: o.created_at,
       updated_at: o.updated_at,
       customer: {
@@ -68,41 +78,79 @@ function getAllOrders(req, res) {
 }
 
 /**
+ * PLAN-11 (D10): 409 cuando una operación del panel aumenta la reserva sin
+ * stock suficiente. `requerido` es el INCREMENTO de reserva (no la cantidad
+ * total del pedido): el frontend muestra `stock - requerido` como el stock que
+ * quedaría si el admin fuerza con `force: true`.
+ * @param {number} stock - Current available stock.
+ * @param {number} requerido - Reservation increase requested.
+ * @returns {Error}
+ */
+function stockInsuficiente(stock, requerido) {
+  return httpError(
+    409,
+    `Stock insuficiente: disponibles ${stock}, requeridas ${requerido}.`,
+    'STOCK_INSUFICIENTE',
+    { stock, requerido }
+  );
+}
+
+/**
  * Venta manual del admin (pedidos grandes, cortesías, ventas por WhatsApp que
  * no pasaron por la web). Una fila = una venta, igual que en su Excel: sin
  * order_items, solo el total de hallacas y el monto.
  *
- * ADR-3: a diferencia del checkout público, esta venta NO se bloquea por stock.
- * El dueño registra la realidad aunque el sistema esté atrasado; si el stock
- * queda negativo se ve en rojo en el panel pidiendo el ajuste.
+ * PLAN-11 (D7, D8, D10):
+ * - Nace CONFIRMADA (confirmed_at = ahora, sin expires_at) y sin el límite
+ *   por teléfono: el dueño ya habló con el cliente.
+ * - `encargo: true` = encargo para la próxima tanda: stock_exempt = 1, total
+ *   opcional, no se chequea stock. Se concreta después con confirmStock.
+ * - Si no es encargo y deja el stock negativo → 409 STOCK_INSUFICIENTE, salvo
+ *   `force: true` (el dueño "registra la realidad" a sabiendas). Antes de
+ *   PLAN-11 nunca se bloqueaba (ADR-3) y eso permitía sobrevender sin aviso.
  */
 function createManualSale(req, res) {
-  const { customerName, customerPhone, quantityHallacas, totalClp, paymentMethod, status, notes, delivery } = req.body;
+  const {
+    customerName, customerPhone, quantityHallacas, totalClp, paymentMethod, status, notes, delivery,
+    encargo, force,
+  } = req.body;
 
-  const qty = Number(quantityHallacas);
-  if (!customerName?.trim() || !Number.isInteger(qty) || qty <= 0) {
+  // PLAN-11: tipos estrictos; un número en customerName o notes respondía 500.
+  if (typeof customerName !== 'string' || !customerName.trim()) {
     return res.status(400).json({ error: 'Cliente y cantidad de hallacas (entero > 0) son requeridos.' });
   }
-  // H-7 (auditoría 10): la venta manual no se topa por STOCK (a propósito, el
-  // dueño registra la realidad), pero sí por rango — una venta de 50.000.000
-  // dejaba el stock en −49.999.999 y el catálogo muerto. Mismo tope que R-5.
+  const qty = Number(quantityHallacas);
+  if (!Number.isInteger(qty) || qty <= 0) {
+    return res.status(400).json({ error: 'Cliente y cantidad de hallacas (entero > 0) son requeridos.' });
+  }
+  // H-7 (auditoría 10): tope de rango — una venta de 50.000.000 dejaba el
+  // stock en −49.999.999 y el catálogo muerto. Mismo tope que R-5.
   if (qty > MAX_HALLACAS) {
     return res.status(400).json({ error: `Cantidad fuera de rango (máximo ${MAX_HALLACAS} por venta).` });
+  }
+  if (notes !== undefined && notes !== null && typeof notes !== 'string') {
+    return res.status(400).json({ error: 'Las notas deben ser texto.' });
+  }
+  if (encargo !== undefined && typeof encargo !== 'boolean') {
+    return res.status(400).json({ error: 'encargo debe ser true o false.' });
+  }
+  if (force !== undefined && typeof force !== 'boolean') {
+    return res.status(400).json({ error: 'force debe ser true o false.' });
   }
   const saleStatus = status || 'pendiente_pago';
   if (!VALID_STATUSES.includes(saleStatus)) {
     return res.status(400).json({ error: `Estado inválido. Opciones: ${VALID_STATUSES.join(', ')}` });
   }
+  // PLAN-11: una venta que nace cancelada no tiene sentido y ensucia reportes.
+  if (saleStatus === 'cancelado') {
+    return res.status(400).json({ error: 'No se puede registrar una venta como cancelada.' });
+  }
   if (paymentMethod && !VALID_PAYMENT_METHODS.includes(paymentMethod)) {
     return res.status(400).json({ error: `Método de pago inválido. Opciones: ${VALID_PAYMENT_METHODS.join(', ')}` });
   }
-  // QA-H1: teléfono inválido por red se normalizaba a NULL en silencio — ahora 400 explícito.
-  // El teléfono sigue siendo opcional (vacío/ausente pasa), pero si viene con
-  // contenido no vacío que no normaliza a un móvil chileno válido, se rechaza
-  // en vez de guardarse como NULL sin avisar (mismo copy que el alert inline
-  // del panel, AdminDashboard.jsx QA-09).
-  // QA-H4: customerPhone puede llegar como número JSON por red — String() antes
-  // de .trim() para no responder 500 donde corresponde un 400.
+  // QA-H1/QA-H4: teléfono opcional, pero si viene con contenido inválido se
+  // rechaza (400) en vez de guardarse como NULL en silencio. String() antes de
+  // .trim() porque puede llegar como número JSON.
   const rawPhone = String(customerPhone ?? '').trim();
   const normalizedPhone = rawPhone ? normalizePhone(rawPhone) : null;
   if (rawPhone && !normalizedPhone) {
@@ -110,15 +158,23 @@ function createManualSale(req, res) {
   }
   // Cortesías van con total 0 (así las registra el dueño en su Excel)
   const total = saleStatus === 'cortesia' ? 0 : (Number.isInteger(totalClp) && totalClp >= 0 ? totalClp : null);
+  const esEncargo = encargo === true;
 
-  try {
+  const insertSale = db.transaction(() => {
+    // PLAN-11 (D10): chequeo y escritura bajo el mismo lock (.immediate()).
+    if (!esEncargo && force !== true) {
+      const stock = getStock();
+      if (qty > stock) throw stockInsuficiente(stock, qty);
+    }
     // QA-16/ADR-2: la venta manual también se atribuye a la tanda vigente,
-    // igual que las ventas web (createOrder), para que los informes por
-    // tanda no queden cojos según el canal de venta.
+    // igual que las ventas web, para que los informes por tanda no queden cojos.
     const batchId = getCurrentBatchId();
-    const result = db.prepare(`
-      INSERT INTO orders (customer_name, customer_phone, quantity_hallacas, total_clp, payment_method, status, notes, delivery, source, batch_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'admin', ?)
+    // PLAN-11 — INVARIANTE DEL BACKFILL: la venta manual nace con
+    // confirmed_at fijado, así que nunca queda con confirmed_at y expires_at
+    // ambos en NULL (ver addOrdersReviewColumns en migrate.js).
+    return db.prepare(`
+      INSERT INTO orders (customer_name, customer_phone, quantity_hallacas, total_clp, payment_method, status, notes, delivery, source, batch_id, stock_exempt, confirmed_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'admin', ?, ?, datetime('now'), NULL)
     `).run(
       customerName.trim(),
       normalizedPhone,
@@ -128,164 +184,183 @@ function createManualSale(req, res) {
       saleStatus,
       notes?.trim() || null,
       delivery === 'despacho' ? 'despacho' : 'retiro',
-      batchId
-    );
-    return res.status(201).json({ message: 'Venta registrada', order: { id: result.lastInsertRowid } });
+      batchId,
+      esEncargo ? 1 : 0
+    ).lastInsertRowid;
+  });
+
+  try {
+    const id = insertSale.immediate();
+    return res.status(201).json({
+      message: esEncargo ? 'Encargo registrado para la próxima tanda' : 'Venta registrada',
+      order: { id, stock_exempt: esEncargo ? 1 : 0 },
+    });
   } catch (err) {
-    console.error('createManualSale error:', err);
-    return res.status(500).json({ error: 'Error al registrar la venta.' });
+    return sendError(res, err, 'Error al registrar la venta.', 'createManualSale error');
   }
 }
 
-/** PATCH parcial de una venta: estado, método de pago, total, cantidad, notas. */
+/**
+ * PATCH parcial de una venta: estado, método de pago, total, cantidad, notas,
+ * entrega, concretar encargo (confirmStock) y confirmar pedido web (confirm).
+ *
+ * PLAN-11 (ADR-4): toda la lógica corre dentro de una transacción
+ * .immediate() y relee el pedido ahí adentro, para que la reserva calculada
+ * sea la que realmente se escribe. Cualquier operación que AUMENTE la reserva
+ * (confirmar un vencido, reactivar un cancelado, subir la cantidad,
+ * confirmStock) pasa por el mismo chequeo de stock (D10), salvo `force: true`.
+ */
 function updateOrder(req, res) {
-  const { id } = req.params;
-  const order = db.prepare(`
-    SELECT id, status, total_clp, quantity_hallacas, stock_exempt
-    FROM orders WHERE id = ?
-  `).get(id);
-  if (!order) return res.status(404).json({ error: 'Pedido no encontrado.' });
+  const id = parsePositiveId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Id de pedido inválido.' });
 
-  const updates = [];
-  const values = [];
   const {
     status, paymentMethod, totalClp, quantityHallacas, notes, customerName,
-    delivered, confirmStock,
+    delivered, confirmStock, confirm, force,
   } = req.body;
 
+  // ---- Validación del body (sin tocar la BD) ----
   if (confirmStock !== undefined && confirmStock !== true) {
     return res.status(400).json({ error: 'confirmStock sólo admite el valor true para concretar un encargo.' });
   }
+  if (confirm !== undefined && confirm !== true) {
+    return res.status(400).json({ error: 'confirm sólo admite el valor true.' });
+  }
+  if (force !== undefined && typeof force !== 'boolean') {
+    return res.status(400).json({ error: 'force debe ser true o false.' });
+  }
+  if (status !== undefined && !VALID_STATUSES.includes(status)) {
+    return res.status(400).json({ error: `Estado inválido. Opciones: ${VALID_STATUSES.join(', ')}` });
+  }
+  if (paymentMethod !== undefined && paymentMethod !== null && !VALID_PAYMENT_METHODS.includes(paymentMethod)) {
+    return res.status(400).json({ error: `Método de pago inválido. Opciones: ${VALID_PAYMENT_METHODS.join(', ')}` });
+  }
+  if (totalClp !== undefined && totalClp !== null && (!Number.isInteger(totalClp) || totalClp < 0)) {
+    return res.status(400).json({ error: 'Total inválido.' });
+  }
+  // PLAN-11: entero estricto ≥ 1. Antes `Number()` aceptaba "7" y 0, y una
+  // cantidad 0 dejaba una venta viva que no reservaba nada.
+  if (quantityHallacas !== undefined
+    && (!Number.isInteger(quantityHallacas) || quantityHallacas < 1 || quantityHallacas > MAX_HALLACAS)) {
+    return res.status(400).json({ error: `Cantidad de hallacas inválida (entero entre 1 y ${MAX_HALLACAS}).` });
+  }
+  // PLAN-11: tipos estrictos; antes un número acá respondía 500 en `.trim()`.
+  if (notes !== undefined && notes !== null && typeof notes !== 'string') {
+    return res.status(400).json({ error: 'Las notas deben ser texto.' });
+  }
+  if (customerName !== undefined && (typeof customerName !== 'string' || !customerName.trim())) {
+    return res.status(400).json({ error: 'El nombre no puede quedar vacío.' });
+  }
 
   const confirmingStock = confirmStock === true;
-  if (confirmingStock && order.stock_exempt !== 1) {
-    return res.status(409).json({ error: 'Este pedido ya reserva stock o no corresponde a un encargo.' });
-  }
 
-  const finalStatus = status ?? order.status;
-  const finalQty = quantityHallacas !== undefined ? quantityHallacas : order.quantity_hallacas;
-  const finalTotal = finalStatus === 'cortesia'
-    ? 0
-    : (totalClp !== undefined ? totalClp : order.total_clp);
+  const applyUpdate = db.transaction(() => {
+    // Releído DENTRO del lock: el estado que decide la reserva es el actual.
+    const order = db.prepare(`
+      SELECT id, status, total_clp, quantity_hallacas, stock_exempt, confirmed_at, expires_at,
+             (${LIVE_ORDER_SQL}) AS live,
+             COALESCE(expires_at > datetime('now'), 0) AS hold_open
+      FROM orders WHERE id = ?
+    `).get(id);
+    if (!order) throw httpError(404, 'Pedido no encontrado.');
 
-  if (confirmingStock) {
-    if (finalStatus === 'cancelado') {
-      return res.status(400).json({ error: 'No se puede concretar stock para un pedido cancelado.' });
+    if (confirmingStock && order.stock_exempt !== 1) {
+      throw httpError(409, 'Este pedido ya reserva stock o no corresponde a un encargo.');
     }
-    if (!Number.isInteger(finalQty) || finalQty <= 0 || finalQty > MAX_HALLACAS) {
-      return res.status(400).json({
-        error: `Para concretar el encargo, quantityHallacas debe ser un entero entre 1 y ${MAX_HALLACAS}.`,
-      });
-    }
-    if (!Number.isInteger(finalTotal) || finalTotal < 0) {
-      return res.status(400).json({
-        error: 'Para concretar el encargo, totalClp debe ser un entero mayor o igual a 0.',
-      });
-    }
-  }
 
-  if (status !== undefined) {
-    if (!VALID_STATUSES.includes(status)) {
-      return res.status(400).json({ error: `Estado inválido. Opciones: ${VALID_STATUSES.join(', ')}` });
+    const finalStatus = status ?? order.status;
+    const finalQty = quantityHallacas !== undefined ? quantityHallacas : order.quantity_hallacas;
+    const finalTotal = finalStatus === 'cortesia'
+      ? 0
+      : (totalClp !== undefined ? totalClp : order.total_clp);
+    const finalExempt = confirmingStock ? 0 : order.stock_exempt;
+
+    if (confirmingStock) {
+      if (finalStatus === 'cancelado') {
+        throw httpError(400, 'No se puede concretar stock para un pedido cancelado.');
+      }
+      if (!Number.isInteger(finalQty) || finalQty <= 0 || finalQty > MAX_HALLACAS) {
+        throw httpError(400, `Para concretar el encargo, quantityHallacas debe ser un entero entre 1 y ${MAX_HALLACAS}.`);
+      }
+      if (!Number.isInteger(finalTotal) || finalTotal < 0) {
+        throw httpError(400, 'Para concretar el encargo, totalClp debe ser un entero mayor o igual a 0.');
+      }
     }
-    updates.push('status = ?');
-    values.push(status);
-  }
-  if (paymentMethod !== undefined) {
-    if (paymentMethod !== null && !VALID_PAYMENT_METHODS.includes(paymentMethod)) {
-      return res.status(400).json({ error: `Método de pago inválido. Opciones: ${VALID_PAYMENT_METHODS.join(', ')}` });
+
+    // PLAN-11 (D2): confirmación explícita (confirm) o implícita (status final
+    // pagado/cortesía, o concretar el encargo). Una vez fijado, confirmed_at no
+    // se borra. confirmStock confirma porque concretar = el dueño lo validó
+    // (D8); sin esto, un encargo web vencido quedaba "concretado" sin reservar
+    // nada, y uno por confirmar dejaba de reservar al pasar expires_at.
+    const alreadyConfirmed = order.confirmed_at !== null;
+    const willConfirm = !alreadyConfirmed
+      && (confirm === true || confirmingStock || finalStatus === 'pagado' || finalStatus === 'cortesia');
+    const finalConfirmed = alreadyConfirmed || willConfirm;
+
+    // PLAN-11 (D10): reserva antes y después con los valores FINALES.
+    const reservaAntes = order.live && order.stock_exempt === 0 ? order.quantity_hallacas : 0;
+    const liveAfter = finalStatus !== 'cancelado' && (finalConfirmed || order.hold_open === 1);
+    const reservaDespues = liveAfter && finalExempt === 0 ? finalQty : 0;
+    if (reservaDespues > reservaAntes && force !== true) {
+      const requerido = reservaDespues - reservaAntes;
+      const stock = getStock();
+      if (stock < requerido) throw stockInsuficiente(stock, requerido);
     }
-    updates.push('payment_method = ?');
-    values.push(paymentMethod);
-  }
-  if (totalClp !== undefined) {
-    if (totalClp !== null && (!Number.isInteger(totalClp) || totalClp < 0)) {
-      return res.status(400).json({ error: 'Total inválido.' });
+
+    if (delivered) {
+      if (order.stock_exempt === 1 && !confirmingStock) {
+        throw httpError(409, 'Confirma el encargo y reserva su stock antes de marcarlo como entregado.');
+      }
+      // PLAN-11: no se entrega lo que el dueño no validó. Usa el estado FINAL,
+      // así { confirm: true, delivered: true } en un mismo PATCH es válido.
+      if (!finalConfirmed) {
+        throw httpError(409, 'Confirma el pedido antes de marcarlo como entregado.', 'PEDIDO_NO_CONFIRMADO');
+      }
     }
-    updates.push('total_clp = ?');
-    values.push(totalClp);
-  }
-  // QA-11: la regla "cortesía ⇒ total 0" solo vivía en el POST de creación
-  // (createManualSale); el PATCH la ignoraba y dejaba el total viejo. Este
-  // push va DESPUÉS del bloque de totalClp a propósito: si el body trae
-  // status:'cortesia' Y totalClp, en el UPDATE ambos `total_clp = ?` quedan
-  // en el SET pero SQLite aplica el último, así que gana la cortesía (total
-  // 0) — precedencia intencional. Al salir de cortesía el total queda en 0 y
-  // no es editable inline en el mismo PATCH (aprobado por Anthony, 2026-07-15,
-  // por ahora).
-  if (status === 'cortesia') {
-    updates.push('total_clp = ?');
-    values.push(0);
-  }
-  if (quantityHallacas !== undefined) {
-    const qty = Number(quantityHallacas);
-    if (!Number.isInteger(qty) || qty < 0 || qty > MAX_HALLACAS) {
-      return res.status(400).json({ error: 'Cantidad de hallacas inválida.' });
+
+    const updates = [];
+    const values = [];
+    if (status !== undefined) { updates.push('status = ?'); values.push(status); }
+    if (paymentMethod !== undefined) { updates.push('payment_method = ?'); values.push(paymentMethod); }
+    if (totalClp !== undefined) { updates.push('total_clp = ?'); values.push(totalClp); }
+    // QA-11: "cortesía ⇒ total 0" también en el PATCH. Va DESPUÉS de totalClp
+    // a propósito: SQLite aplica el último `total_clp = ?` del SET, así que
+    // gana la cortesía (precedencia aprobada por Anthony, 2026-07-15).
+    if (status === 'cortesia') { updates.push('total_clp = ?'); values.push(0); }
+    if (quantityHallacas !== undefined) { updates.push('quantity_hallacas = ?'); values.push(quantityHallacas); }
+    if (notes !== undefined) { updates.push('notes = ?'); values.push(notes?.trim() || null); }
+    if (customerName !== undefined) { updates.push('customer_name = ?'); values.push(customerName.trim()); }
+    // QA-16: la entrega es su propia columna con timestamp. ADR-3: dato
+    // informativo, NO entra en el cálculo del stock.
+    if (delivered !== undefined) {
+      updates.push(delivered ? "delivered_at = datetime('now')" : 'delivered_at = NULL');
     }
-    updates.push('quantity_hallacas = ?');
-    values.push(qty);
-  }
-  if (notes !== undefined) {
-    updates.push('notes = ?');
-    values.push(notes?.trim() || null);
-  }
-  if (customerName !== undefined) {
-    if (!customerName?.trim()) return res.status(400).json({ error: 'El nombre no puede quedar vacío.' });
-    updates.push('customer_name = ?');
-    values.push(customerName.trim());
-  }
-  // QA-16: la entrega deja de ser un estado (sale del enum) y pasa a ser su
-  // propia columna con timestamp. ADR-3: `delivered_at` es dato informativo,
-  // NO entra en el cálculo del stock.
-  if (delivered !== undefined) {
-    updates.push(delivered ? "delivered_at = datetime('now')" : 'delivered_at = NULL');
-  }
-  if (confirmingStock) {
     // Esta transición es la reserva: getStock() comenzará a restar el pedido.
     // Sólo se permite de 1 → 0, evitando descontarlo dos veces.
-    updates.push('stock_exempt = 0');
-  }
+    if (confirmingStock) updates.push('stock_exempt = 0');
+    // PLAN-11: confirmar en el mismo UPDATE que el resto de los cambios.
+    if (willConfirm) updates.push("confirmed_at = datetime('now')");
 
-  if (updates.length === 0) {
-    return res.status(400).json({ error: 'Nada que actualizar.' });
-  }
+    if (updates.length === 0) {
+      // `confirm: true` sobre un pedido ya confirmado es idempotente, no error.
+      if (confirm === true) return { finalQty, finalTotal };
+      throw httpError(400, 'Nada que actualizar.');
+    }
+
+    db.prepare(`UPDATE orders SET ${updates.join(', ')} WHERE id = ?`).run(...values, id);
+    return { finalQty, finalTotal };
+  });
 
   try {
-    const applyUpdate = db.transaction(() => {
-      if (confirmingStock || delivered === true) {
-        const current = db.prepare('SELECT stock_exempt FROM orders WHERE id = ?').get(id);
-        if (!current) {
-          const error = new Error('Pedido no encontrado.');
-          error.statusCode = 404;
-          throw error;
-        }
-        if (delivered === true && current.stock_exempt === 1 && !confirmingStock) {
-          const error = new Error('Confirma el encargo y reserva su stock antes de marcarlo como entregado.');
-          error.statusCode = 409;
-          throw error;
-        }
-        if (confirmingStock && current.stock_exempt !== 1) {
-          const error = new Error('Este encargo ya fue concretado; no se descontó stock nuevamente.');
-          error.statusCode = 409;
-          throw error;
-        }
-
-        const stock = confirmingStock ? getStock() : null;
-        if (confirmingStock && finalQty > stock) {
-          const error = new Error(`Stock insuficiente para concretar el encargo: disponibles ${stock}, requeridas ${finalQty}.`);
-          error.statusCode = 409;
-          throw error;
-        }
-      }
-
-      db.prepare(`UPDATE orders SET ${updates.join(', ')} WHERE id = ?`).run(...values, id);
-    });
-
-    applyUpdate();
+    const { finalQty, finalTotal } = applyUpdate.immediate();
+    const row = db.prepare('SELECT confirmed_at, expires_at FROM orders WHERE id = ?').get(id);
     return res.json({
       message: confirmingStock ? 'Encargo concretado y stock reservado' : 'Venta actualizada',
       order: {
-        id: parseInt(id, 10),
+        id,
+        confirmed_at: row.confirmed_at,
+        expires_at: row.expires_at,
+        review: reviewState(row),
         ...(confirmingStock ? {
           stock_exempt: 0,
           quantity_hallacas: finalQty,
@@ -294,9 +369,7 @@ function updateOrder(req, res) {
       },
     });
   } catch (err) {
-    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
-    console.error('updateOrder error:', err);
-    return res.status(500).json({ error: 'Error al actualizar la venta.' });
+    return sendError(res, err, 'Error al actualizar la venta.', 'updateOrder error');
   }
 }
 
@@ -308,7 +381,9 @@ function updateOrder(req, res) {
  * ventas vivas que existen (ADR-3: las ventas no escriben movimientos).
  */
 function deleteOrder(req, res) {
-  const { id } = req.params;
+  // PLAN-11: id validado como entero positivo antes de tocar la BD.
+  const id = parsePositiveId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Id de pedido inválido.' });
   const order = db.prepare('SELECT id FROM orders WHERE id = ?').get(id);
   if (!order) return res.status(404).json({ error: 'Pedido no encontrado.' });
 
@@ -425,7 +500,8 @@ function updateSettings(req, res) {
  * aprobadas por Anthony (2026-07-15).
  *
  * - total_de_ventas    = Σ total_clp de ventas vivas (cortesías suman 0;
- *                        'cancelado' queda fuera de todo).
+ *                        'cancelado' queda fuera de todo). PLAN-11: "vivas"
+ *                        = LIVE_ORDER_SQL; un pedido web vencido no cuenta.
  * - hallacas_vendidas  = Σ cantidad de ventas no-cortesía.
  * - stock              = Σ stock_movements.delta − ventas vivas (ADR-3, plan
  *                        09). ENTERO SIEMPRE, puede ser negativo, nunca null.
@@ -457,12 +533,12 @@ function getReports(req, res) {
       COALESCE(SUM(CASE WHEN status = 'cortesia' THEN quantity_hallacas ELSE 0 END), 0) AS hallacas_cortesia,
       COUNT(CASE WHEN status = 'cortesia' THEN 1 END) AS cantidad_cortesias,
       COUNT(CASE WHEN status != 'cortesia' THEN 1 END) AS n_ventas
-    FROM orders WHERE status != 'cancelado' AND stock_exempt = 0
+    FROM orders WHERE ${LIVE_ORDER_SQL} AND stock_exempt = 0
   `).get();
 
   const porMetodo = db.prepare(`
     SELECT COALESCE(payment_method, 'sin_registrar') AS metodo, COALESCE(SUM(total_clp), 0) AS total
-    FROM orders WHERE status != 'cancelado' AND stock_exempt = 0
+    FROM orders WHERE ${LIVE_ORDER_SQL} AND stock_exempt = 0
     GROUP BY payment_method
   `).all();
 
@@ -470,20 +546,31 @@ function getReports(req, res) {
     SELECT status, COUNT(*) AS n FROM orders WHERE stock_exempt = 0 GROUP BY status
   `).all();
 
+  // PLAN-11: pedidos web aún sin validar y vencidos (incluye encargos web:
+  // también esperan la confirmación del dueño). Cancelados no cuentan.
+  const porConfirmar = db.prepare(`
+    SELECT COUNT(*) AS n, COALESCE(SUM(quantity_hallacas), 0) AS hallacas
+    FROM orders WHERE ${PENDING_REVIEW_SQL}
+  `).get();
+  const vencidos = db.prepare(`
+    SELECT COUNT(*) AS n, COALESCE(SUM(quantity_hallacas), 0) AS hallacas
+    FROM orders WHERE ${EXPIRED_REVIEW_SQL}
+  `).get();
+
   // QA-17: montos por estado de pago (ventas con total_clp NULL, "a
   // coordinar", no suman en ninguno de los dos).
   const montos = db.prepare(`
     SELECT
       COALESCE(SUM(CASE WHEN status = 'pagado' THEN total_clp END), 0)         AS monto_pagado,
       COALESCE(SUM(CASE WHEN status = 'pendiente_pago' THEN total_clp END), 0) AS monto_adeudado
-    FROM orders WHERE status != 'cancelado' AND stock_exempt = 0
+    FROM orders WHERE ${LIVE_ORDER_SQL} AND stock_exempt = 0
   `).get();
 
   // 'localtime' para que el corte de día sea el del negocio y no UTC.
   // En Render conviene fijar TZ=America/Santiago para que coincida con Chile.
   const ventasHoy = db.prepare(`
     SELECT COUNT(*) AS n, COALESCE(SUM(total_clp), 0) AS total
-    FROM orders WHERE status != 'cancelado' AND stock_exempt = 0
+    FROM orders WHERE ${LIVE_ORDER_SQL} AND stock_exempt = 0
       AND date(created_at, 'localtime') = date('now', 'localtime')
   `).get();
 
@@ -503,7 +590,7 @@ function getReports(req, res) {
   // se muestran aparte en el panel ("Encargos por coordinar").
   const { encargos } = db.prepare(`
     SELECT COALESCE(SUM(quantity_hallacas), 0) AS encargos
-    FROM orders WHERE status != 'cancelado' AND stock_exempt = 1
+    FROM orders WHERE ${LIVE_ORDER_SQL} AND stock_exempt = 1
   `).get();
 
   return res.json({
@@ -526,7 +613,14 @@ function getReports(req, res) {
       monto_pagado: montos.monto_pagado,
       monto_adeudado: montos.monto_adeudado,
       ticket_promedio: ventas.n_ventas > 0 ? Math.round(ventas.total_de_ventas / ventas.n_ventas) : 0,
-      ventas_por_estado: Object.fromEntries(porEstado.map((r) => [r.status, r.n])),
+      // PLAN-11: porEstado suma además los contadores de revisión.
+      ventas_por_estado: {
+        ...Object.fromEntries(porEstado.map((r) => [r.status, r.n])),
+        por_confirmar: porConfirmar.n,
+        vencidos: vencidos.n,
+      },
+      por_confirmar: porConfirmar,
+      vencidos,
       ventas_hoy: ventasHoy,
     },
   });

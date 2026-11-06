@@ -1,4 +1,5 @@
 const { db } = require('../database/db');
+const { LIVE_ORDER_SQL, holdHours, maxPorTelefono } = require('../utils/orderState');
 
 /**
  * ADR-3 (plan 09, supersede ADR-2): EL STOCK ES UN DATO PROPIO, no una fórmula
@@ -8,8 +9,9 @@ const { db } = require('../database/db');
  *
  * - `stock_movements` son ingresos/egresos con motivo obligatorio: los crea el
  *   dueño a mano, o el sistema al registrar una tanda (movimiento independiente).
- * - Las ventas se restan DERIVADAS de `orders` (status != 'cancelado', incluye
- *   cortesías: también consumen stock). No escriben movimientos, así cancelar,
+ * - Las ventas se restan DERIVADAS de `orders`, solo las VIVAS (LIVE_ORDER_SQL,
+ *   incluye cortesías: también consumen stock). PLAN-11 (ADR-4): un pedido web
+ *   por confirmar reserva hasta `expires_at`; vencido, deja de restar solo. No escriben movimientos, así cancelar,
  *   borrar o editar una venta ajusta el stock solo.
  * - `production_batches` NO aparece acá, ni debe aparecer nunca: es la tabla de
  *   costos (inversión, costo por hallaca, ganancia, margen). Borrar o editar una
@@ -19,14 +21,19 @@ const { db } = require('../database/db');
  * hallacas ingresadas → el panel lo muestra en rojo pidiendo el ajuste). Se
  * eliminó el `return null` de ADR-2: ya no existe el modo "sin límite" que
  * permitía vender sin stock (invariante I-4).
+ *
+ * @param {import('better-sqlite3').Database} [conn] - Connection to query.
+ *   PLAN-11: parámetro opcional para que los tests de migración midan el stock
+ *   sobre una BD aparte; en producción siempre es el singleton `db`.
+ * @returns {number} Available stock (may be negative).
  */
-function getStock() {
-  const { movimientos } = db.prepare(`
+function getStock(conn = db) {
+  const { movimientos } = conn.prepare(`
     SELECT COALESCE(SUM(delta), 0) AS movimientos FROM stock_movements
   `).get();
-  const { comprometidas } = db.prepare(`
+  const { comprometidas } = conn.prepare(`
     SELECT COALESCE(SUM(quantity_hallacas), 0) AS comprometidas
-    FROM orders WHERE status != 'cancelado' AND stock_exempt = 0
+    FROM orders WHERE ${LIVE_ORDER_SQL} AND stock_exempt = 0
   `).get();
   return movimientos - comprometidas;
 }
@@ -49,11 +56,11 @@ function getStockBreakdown() {
   `).get();
   const { comprometidas } = db.prepare(`
     SELECT COALESCE(SUM(quantity_hallacas), 0) AS comprometidas
-    FROM orders WHERE status != 'cancelado' AND stock_exempt = 0
+    FROM orders WHERE ${LIVE_ORDER_SQL} AND stock_exempt = 0
   `).get();
   const { entregadas } = db.prepare(`
     SELECT COALESCE(SUM(quantity_hallacas), 0) AS entregadas
-    FROM orders WHERE delivered_at IS NOT NULL AND status != 'cancelado'
+    FROM orders WHERE delivered_at IS NOT NULL AND ${LIVE_ORDER_SQL}
   `).get();
 
   return {
@@ -95,6 +102,9 @@ function listPublicPacks(req, res) {
     return res.json({
       packs: rows.map((r) => toPublicPack(r, stock)),
       stock_available: stock,
+      // PLAN-11: el frontend topa el carrito y el encargo con el mismo límite
+      // que valida createOrder, y muestra la duración real de la reserva.
+      limits: { maxHallacasPorTelefono: maxPorTelefono(), holdHours: holdHours() },
     });
   } catch (err) {
     console.error('listPublicPacks error:', err);

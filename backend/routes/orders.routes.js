@@ -5,6 +5,7 @@ const { requireAuth } = require('../middleware/auth');
 const { optionalAuth } = require('../middleware/optionalAuth');
 const { handleValidationErrors } = require('../middleware/validate');
 const { normalizePhone } = require('../utils/phone');
+const { orderLimiter } = require('../middleware/rateLimiter');
 
 const router = Router();
 
@@ -27,20 +28,23 @@ const orderValidators = [
   body('address')
     .if((value, { req }) => req.body.delivery === 'despacho')
     .trim().notEmpty().withMessage('La dirección (calle, número y comuna) es requerida para despacho.')
-    .isLength({ max: 200 }).withMessage('La dirección es muy larga.')
-    .escape(),
+    // PLAN-11 (D12): sin .escape(). React ya escapa al mostrar y Telegram va
+    // en texto plano; escapar acá guardaba "O&#x27;Higgins" en la BD.
+    .isLength({ max: 200 }).withMessage('La dirección es muy larga.'),
   body('notes')
     .optional({ checkFalsy: true })
     .trim()
-    .isLength({ max: 500 }).withMessage('Las notas no pueden superar 500 caracteres.')
-    .escape(),
+    // PLAN-11 (D12): sin .escape(), mismo motivo que address.
+    .isLength({ max: 500 }).withMessage('Las notas no pueden superar 500 caracteres.'),
   body('dateHint')
     .optional({ checkFalsy: true })
     .trim()
     .isLength({ max: 50 }),
 ];
 
-router.post('/',     optionalAuth, orderValidators, handleValidationErrors, createOrder);
+// PLAN-11: orderLimiter antes de optionalAuth, para cortar el abuso antes de
+// tocar la BD (optionalAuth consulta users).
+router.post('/',     orderLimiter, optionalAuth, orderValidators, handleValidationErrors, createOrder);
 router.get('/mine',  requireAuth, getMyOrders);
 
 module.exports = router;
