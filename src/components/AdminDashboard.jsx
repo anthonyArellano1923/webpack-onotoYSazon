@@ -168,7 +168,7 @@ function VentasTab({ onCatalogChange, showStockExemptOnly, onClearStockExemptFil
   const [editingEncargoId, setEditingEncargoId] = useState(null);
 
   const load = useCallback(() => {
-    adminGetOrders().then((d) => setOrders(d.orders)).catch((e) => setError(e.message));
+    adminGetOrders().then((d) => { setOrders(d.orders); setError(''); }).catch((e) => setError(e.message));
   }, []);
   useEffect(load, [load]);
 
@@ -969,7 +969,7 @@ function UsuariosTab() {
   const [error, setError] = useState('');
 
   const load = useCallback(() => {
-    adminGetUsers().then((d) => setUsers(d.users)).catch((e) => setError(e.message));
+    adminGetUsers().then((d) => { setUsers(d.users); setError(''); }).catch((e) => setError(e.message));
   }, []);
   useEffect(load, [load]);
 
@@ -1034,6 +1034,7 @@ function PacksTab({ onCatalogChange }) {
   const load = useCallback(() => {
     adminGetPacks().then((d) => {
       setPacks(d.packs);
+      setError('');
       setPrices(Object.fromEntries(d.packs.map((p) => [p.id, p.price_clp ?? ''])));
     }).catch((e) => setError(e.message));
   }, []);

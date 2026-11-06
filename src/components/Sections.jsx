@@ -554,7 +554,7 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, car
               <button className="btn btn--primary modal__cta" onClick={add}
                 disabled={soldOut || selectionExceedsStock}
                 style={{ opacity: (soldOut || selectionExceedsStock) ? 0.5 : 1 }}>
-                {soldOut ? (pack.fallback ? "Consultar" : "Agotado") : (selectionExceedsStock ? "Ajusta la cantidad" : "Añadir al carrito")}
+                {soldOut ? (pack.fallback ? "No disponible" : "Agotado") : (selectionExceedsStock ? "Ajusta la cantidad" : "Añadir al carrito")}
               </button>
             </> :
 
@@ -564,7 +564,7 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, car
             disabled={!canSubmitCustom || soldOut}
             style={{ opacity: (canSubmitCustom && !soldOut) ? 1 : 0.5 }}>
 
-              <IconWhatsapp size={16} /> {soldOut ? (pack.fallback ? "Consultar" : "Agotado") : "Pedir"}
+              <IconWhatsapp size={16} /> {soldOut ? (pack.fallback ? "No disponible" : "Agotado") : "Pedir"}
             </button>
           }
         </div>

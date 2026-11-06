@@ -1674,6 +1674,10 @@ a { color: inherit; text-decoration: none; }
     scrollbar-width: thin;
     padding-bottom: 2px;
   }
+  /* La tabla debe ser transparente para que se vean las sombras de scroll del contenedor */
+  .admin-table-wrap { background-color: var(--bg-elev); }
+  .admin-table { background: transparent; }
+  .admin-table th { background: var(--surface-tint); }
   .admin-table-wrap::-webkit-scrollbar { height: 8px; -webkit-appearance: none; }
   .admin-table-wrap::-webkit-scrollbar-thumb { background: var(--fg-subtle); border-radius: 4px; }
 

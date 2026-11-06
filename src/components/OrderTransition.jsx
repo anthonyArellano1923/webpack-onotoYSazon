@@ -14,11 +14,13 @@ import useModalFocus from '../hooks/useModalFocus';
  * guardado falla, cerramos esa pestaña y WhatsApp queda como acción explícita.
  */
 function OrderTransition({ waTab, waUrl, placeOrderPromise, user, onClose, onAdjust, onOpenAuth }) {
-  const dialogRef = useModalFocus(onClose);
   const [ready, setReady] = useState(false);
   const [failMsg, setFailMsg] = useState('');
   const [consulting, setConsulting] = useState(false);
   const consultingRef = useRef(false);
+  // Esc solo cierra cuando ya hay botones de salida: cerrar mientras se guarda
+  // cancelaría la navegación de la pestaña de WhatsApp.
+  const dialogRef = useModalFocus(ready ? onClose : undefined);
 
   useEffect(() => {
     let cancelled = false;
