@@ -16,7 +16,7 @@ import {
 } from './lib/TweaksPanel';
 import AuthModal from './components/AuthModal';
 import AdminDashboard from './components/AdminDashboard';
-import { getStoredUser, clearAuth, getPacks } from './services/api';
+import { getStoredUser, clearAuth, getPacks, onUnauthorized, adminGetOrders } from './services/api';
 
 /* ---- Hooks ---- */
 function useTheme() {
@@ -93,6 +93,8 @@ export default function App() {
      responde (sin flag `available` ⇒ todo se muestra disponible). */
   const [packs, setPacks] = useState(staticPacks);
   const [stockAvailable, setStockAvailable] = useState(null);
+  // PLAN-11: límites informados por el backend; respaldo si la API falla o no los trae.
+  const [limits, setLimits] = useState({ maxHallacasPorTelefono: 20, holdHours: 24 });
   // QA-13: extraído a función reutilizable para poder refrescar el catálogo
   // desde el panel de admin tras cada guardado (packs, ajustes, ventas).
   const refreshPacks = useCallback(() => {
@@ -101,6 +103,15 @@ export default function App() {
         if (data.packs?.length) setPacks(data.packs);
         if (Number.isFinite(data.stock_available)) {
           setStockAvailable(Math.max(0, Math.trunc(data.stock_available)));
+        }
+        const lim = data.limits;
+        if (lim) {
+          setLimits((prev) => ({
+            maxHallacasPorTelefono: Number.isFinite(lim.maxHallacasPorTelefono) && lim.maxHallacasPorTelefono > 0
+              ? Math.trunc(lim.maxHallacasPorTelefono) : prev.maxHallacasPorTelefono,
+            holdHours: Number.isFinite(lim.holdHours) && lim.holdHours > 0
+              ? Math.trunc(lim.holdHours) : prev.holdHours,
+          }));
         }
       })
       .catch((err) => console.warn('No se pudo cargar el catálogo desde la API, usando fallback:', err.message));
@@ -147,6 +158,11 @@ export default function App() {
     if (pack.available === false) { showToast(`${pack.name} está agotado`); return false; }
     const currentCart = cartRef.current;
     const projectedHallacas = countCartHallacas(currentCart) + (pack.qty * amount);
+    // PLAN-11 (D6): no se puede superar el máximo por teléfono desde el carrito.
+    if (projectedHallacas > limits.maxHallacasPorTelefono) {
+      showToast('Llegaste al máximo de hallacas por pedido.');
+      return false;
+    }
     if (stockKnown && projectedHallacas > stockAvailable) {
       showToast('Stock máximo alcanzado. Ajusta tu pedido o consulta la próxima tanda.');
       return false;
@@ -181,6 +197,11 @@ export default function App() {
     const pack = packs.find((candidate) => candidate.id === id);
     if (nextQty > currentItem.qty && pack?.available === false) {
       showToast(`${pack.name} está agotado`);
+      return false;
+    }
+    if (nextQty > currentItem.qty && pack?.price != null
+      && countCartHallacas(currentCart) + (nextQty - currentItem.qty) * pack.qty > limits.maxHallacasPorTelefono) {
+      showToast('Llegaste al máximo de hallacas por pedido.');
       return false;
     }
     if (nextQty > currentItem.qty && pack?.price != null && stockKnown) {
@@ -250,6 +271,36 @@ export default function App() {
     showToast._t = setTimeout(() => setToast((t) => ({ ...t, visible: false })), 2200);
   }, []);
 
+  /* PLAN-11: un 401 con token presente (sesión vencida) cierra la sesión sin
+     el confirm() de handleLogout. api.js ya limpió el token. */
+  useEffect(() => onUnauthorized(() => {
+    setUser(null);
+    setAdminOpen(false);
+    showToast('Tu sesión expiró. Inicia sesión nuevamente.');
+  }), [showToast]);
+
+  /* PLAN-11: badge de pedidos por confirmar en el botón Panel. Se cuenta con el
+     mismo filtro que el bloque «Por confirmar» (review === 'por_confirmar').
+     Refresca al montar, cada 60 s con el panel abierto y al volver el foco. */
+  const [pendingCount, setPendingCount] = useState(0);
+  const refreshPending = useCallback(() => {
+    adminGetOrders()
+      .then((d) => setPendingCount((d.orders || []).filter((o) => o.review === 'por_confirmar').length))
+      .catch(() => {});
+  }, []);
+  const isAdmin = user?.role === 'admin';
+  useEffect(() => {
+    if (!isAdmin) { setPendingCount(0); return undefined; }
+    refreshPending();
+    const onVisible = () => { if (document.visibilityState === 'visible') refreshPending(); };
+    document.addEventListener('visibilitychange', onVisible);
+    const timer = adminOpen ? setInterval(refreshPending, 60000) : null;
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      if (timer) clearInterval(timer);
+    };
+  }, [isAdmin, adminOpen, refreshPending]);
+
   useReveal();
   const activeSection = useActiveSection();
 
@@ -261,7 +312,8 @@ export default function App() {
       <Nav cartCount={cartCount} onOpenCart={() => setCartOpen(true)}
            theme={theme} onToggleTheme={handleToggleTheme} activeSection={activeSection}
            user={user} onOpenAuth={() => openAuth('login')} onLogout={handleLogout}
-           onOpenAdmin={() => setAdminOpen(true)} />
+           onOpenAdmin={() => setAdminOpen(true)}
+           pendingCount={pendingCount} />
 
       <main>
         <Hero onShopClick={() => {
@@ -302,12 +354,13 @@ export default function App() {
 
       {/* Modals */}
       {openPack && <PackModal pack={openPack} user={user} onClose={() => setOpenPack(null)} onAdd={addToCart}
-        onOpenAuth={openAuth} stockAvailable={stockAvailable} cartHallacas={cartHallacas} />}
+        onOpenAuth={openAuth} stockAvailable={stockAvailable} cartHallacas={cartHallacas}
+        limits={limits} />}
       {cartOpen && <CartModal items={cart} packs={packs} user={user} onClose={() => setCartOpen(false)}
         onChangeQty={changeQty} onRemove={removeFromCart}
         onOrderSuccess={() => { clearCart(); refreshPacks(); }} onOrderFailure={refreshPacks}
         onOpenAuth={openAuth} stockAvailable={stockAvailable} cartHallacas={cartHallacas}
-        stockExceeded={stockExceeded} />}
+        stockExceeded={stockExceeded} limits={limits} />}
       {authModal && (
         <AuthModal
           initialTab={authModal}
@@ -319,7 +372,8 @@ export default function App() {
         />
       )}
       {adminOpen && user?.role === 'admin' && (
-        <AdminDashboard onClose={() => setAdminOpen(false)} onCatalogChange={refreshPacks} />
+        <AdminDashboard onClose={() => setAdminOpen(false)} onCatalogChange={refreshPacks}
+          onPendingChange={refreshPending} pendingCount={pendingCount} />
       )}
 
       {/* Tweaks panel */}

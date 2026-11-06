@@ -19,6 +19,10 @@ import { normalizePhone, phoneToDigits } from '../utils/phone';
 import SANTIAGO_COMUNAS from '../data/comunas';
 import ingredients from '../data/ingredients';
 import OrderTransition from './OrderTransition';
+import ContactSellerNotice from './ContactSellerNotice';
+
+// PLAN-11: respaldo si /packs no trae `limits` (API caída o backend viejo).
+const DEFAULT_LIMITS = { maxHallacasPorTelefono: 20, holdHours: 24 };
 
 const formatCLP = (n) => {
   if (n == null) return "—";
@@ -58,7 +62,7 @@ function Placeholder({ variant, label }) {
 }
 
 /* ---------- Nav ---------- */
-function Nav({ cartCount, onOpenCart, theme, onToggleTheme, activeSection, user, onOpenAuth, onLogout, onOpenAdmin }) {
+function Nav({ cartCount, onOpenCart, theme, onToggleTheme, activeSection, user, onOpenAuth, onLogout, onOpenAdmin, pendingCount = 0 }) {
   const links = [
   { id: "menu", label: "Menú" },
   { id: "tradition", label: "Tradición" },
@@ -91,6 +95,8 @@ function Nav({ cartCount, onOpenCart, theme, onToggleTheme, activeSection, user,
             style={{ fontSize: 12, padding: '4px 10px', fontWeight: 700 }}
           >
             Panel
+            {/* PLAN-11: pedidos web por confirmar */}
+            {pendingCount > 0 && <span className="icon-btn__badge" aria-label={`${pendingCount} pedidos por confirmar`}>{pendingCount}</span>}
           </button>
         )}
         {user ? (
@@ -286,7 +292,7 @@ function MenuSection({ packs, onOpenPack, onAddToCart, favs, onToggleFav, stockA
 }
 
 /* ---------- Pack Detail Modal ---------- */
-function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, cartHallacas }) {
+function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, cartHallacas, limits = DEFAULT_LIMITS }) {
   const [qty, setQty] = useState(1);
   const [customQty, setCustomQty] = useState('');
   const [name, setName] = useState(user?.name || '');
@@ -326,9 +332,14 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, car
     && stockIsKnown(stockAvailable)
     && cartHallacas + pack.qty * (qty + 1) > stockAvailable;
 
+  // PLAN-11 (D6): el carrito tampoco puede pasar del máximo por teléfono.
+  const limitPerPhone = limits?.maxHallacasPorTelefono ?? DEFAULT_LIMITS.maxHallacasPorTelefono;
+  const selectionExceedsLimit = !isCustom && cartHallacas + selectionHallacas > limitPerPhone;
+  const incrementExceedsLimit = !isCustom && cartHallacas + pack.qty * (qty + 1) > limitPerPhone;
+
   const dec = () => setQty((q) => Math.max(1, q - 1));
   const inc = () => {
-    if (soldOut || incrementExceedsStock) return;
+    if (soldOut || incrementExceedsStock || incrementExceedsLimit) return;
     setQty((q) => Math.min(99, q + 1));
   };
   const add = () => {
@@ -340,9 +351,11 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, car
   const matchedComuna = SANTIAGO_COMUNAS.find((c) => c.toLowerCase() === comuna.trim().toLowerCase());
   const addressComplete = delivery !== 'despacho' || (street.trim() && streetNumber.trim() && matchedComuna);
   const customQtyNum = parseInt(customQty, 10);
-  // QA-15 (prevención): tope de 1000 en el pedido por encargo — sin tope, una
-  // cantidad absurda envenena el stock comprometido para siempre.
-  const customQtyValid = Number.isInteger(customQtyNum) && customQtyNum > 0 && customQtyNum <= 1000;
+  // PLAN-11 (D6): el tope del encargo web es el máximo por teléfono que informa
+  // el backend (antes 1.000, QA-15); lo mayor lo coordina el dueño por WhatsApp.
+  const maxQty = limits?.maxHallacasPorTelefono ?? DEFAULT_LIMITS.maxHallacasPorTelefono;
+  const customQtyOver = Number.isInteger(customQtyNum) && customQtyNum > maxQty;
+  const customQtyValid = Number.isInteger(customQtyNum) && customQtyNum > 0 && !customQtyOver;
   const canSubmitCustom = customQtyValid && name.trim() && normalizedPhone && addressComplete;
   const customAddress = delivery === 'despacho' && addressComplete
     ? `${street.trim()} ${streetNumber.trim()}, ${matchedComuna}`
@@ -449,7 +462,7 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, car
                 <button
                   className="qty__btn"
                   onClick={inc}
-                  disabled={soldOut || incrementExceedsStock || qty >= 99}
+                  disabled={soldOut || incrementExceedsStock || incrementExceedsLimit || qty >= 99}
                   aria-describedby={incrementExceedsStock ? 'pack-stock-alert' : undefined}
                   aria-label={incrementExceedsStock ? 'No se puede aumentar: stock máximo alcanzado' : 'Aumentar'}>
                   <IconPlus size={14} />
@@ -464,16 +477,16 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, car
                   className="form-input"
                   type="number"
                   min="1"
-                  max="1000"
+                  max={maxQty}
                   step="1"
                   inputMode="numeric"
                   value={customQty}
                   onChange={(e) => setCustomQty(e.target.value)}
                   placeholder="Ej: 25" />
-                {customQtyNum > 1000 &&
-              <p role="alert" style={{ margin: "6px 0 0", fontSize: 12.5, color: "var(--onoto-crimson, #880D1E)" }}>
-                    Para pedidos de más de 1000 hallacas escríbenos directo por WhatsApp.
-                  </p>
+                {customQtyOver &&
+              <div style={{ marginTop: 8 }}>
+                    <ContactSellerNotice id="custom-qty-limit" waUrl={`https://wa.me/${WHATSAPP_PHONE}?text=${encodeURIComponent(buildCustomMessage())}`} />
+                  </div>
               }
               </Field>
               <Field label="Nombre" id="custom-name">
@@ -532,7 +545,8 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, car
               </Field>
             </div>
           }
-          {(selectionExceedsStock || incrementExceedsStock) && (
+          {selectionExceedsLimit && <ContactSellerNotice id="pack-limit-alert" />}
+          {!selectionExceedsLimit && (selectionExceedsStock || incrementExceedsStock) && (
             <StockLimitNotice
               id="pack-stock-alert"
               stockAvailable={stockAvailable}
@@ -548,9 +562,9 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, car
                 <span className="modal__total-value">{soldOut ? "Agotado" : formatCLP(total)}</span>
               </div>
               <button className="btn btn--primary modal__cta" onClick={add}
-                disabled={soldOut || selectionExceedsStock}
-                style={{ opacity: (soldOut || selectionExceedsStock) ? 0.5 : 1 }}>
-                {soldOut ? "Agotado" : (selectionExceedsStock ? "Ajusta la cantidad" : "Añadir al carrito")}
+                disabled={soldOut || selectionExceedsStock || selectionExceedsLimit}
+                style={{ opacity: (soldOut || selectionExceedsStock || selectionExceedsLimit) ? 0.5 : 1 }}>
+                {soldOut ? "Agotado" : ((selectionExceedsStock || selectionExceedsLimit) ? "Ajusta la cantidad" : "Añadir al carrito")}
               </button>
             </> :
 
@@ -647,7 +661,7 @@ function AddressFields({ idPrefix, street, setStreet, streetNumber, setStreetNum
 /* ---------- Cart Modal ---------- */
 function CartModal({
   items, packs, user, onClose, onChangeQty, onRemove, onOrderSuccess, onOrderFailure, onOpenAuth,
-  stockAvailable, cartHallacas, stockExceeded,
+  stockAvailable, cartHallacas, stockExceeded, limits = DEFAULT_LIMITS,
 }) {
   const [name, setName] = useState(user?.name || '');
   const [phone, setPhone] = useState(user?.phone ? phoneToDigits(user.phone) : '');
@@ -673,7 +687,10 @@ function CartModal({
     const pack = packs.find((candidate) => candidate.id === item.id);
     return pack?.price != null && cartHallacas + pack.qty > stockAvailable;
   });
-  const canSubmit = items.length > 0 && name.trim() && normalizedPhone && addressComplete && !stockExceeded;
+  // PLAN-11 (D6): sobre el máximo por teléfono el pedido no se acepta en la web.
+  const maxPerPhone = limits?.maxHallacasPorTelefono ?? DEFAULT_LIMITS.maxHallacasPorTelefono;
+  const limitExceeded = cartHallacas > maxPerPhone;
+  const canSubmit = items.length > 0 && name.trim() && normalizedPhone && addressComplete && !stockExceeded && !limitExceeded;
   const address = delivery === 'despacho' && addressComplete
     ? `${street.trim()} ${streetNumber.trim()}, ${matchedComuna}`
     : null;
@@ -798,7 +815,7 @@ function CartModal({
                           className="qty__btn"
                           style={{ width: 28, height: 28 }}
                           onClick={() => onChangeQty(it.id, it.qty + 1)}
-                          disabled={p.available === false || stockBlocksIncrement || it.qty >= 99}
+                          disabled={p.available === false || stockBlocksIncrement || it.qty >= 99 || cartHallacas + p.qty > maxPerPhone}
                           aria-describedby={stockBlocksIncrement ? 'cart-stock-alert' : undefined}
                           aria-label={it.qty >= 99
                             ? `No se puede aumentar ${p.name}: máximo de 99 packs alcanzado`
@@ -822,7 +839,10 @@ function CartModal({
             })}
             </div>
           }
-          {items.length > 0 && (stockExceeded || hasBlockedIncrement) && (
+          {items.length > 0 && limitExceeded && (
+            <ContactSellerNotice id="cart-limit-alert" waUrl={`https://wa.me/${WHATSAPP_PHONE}?text=${encodeURIComponent(buildMessage())}`} />
+          )}
+          {items.length > 0 && !limitExceeded && (stockExceeded || hasBlockedIncrement) && (
             <StockLimitNotice
               id="cart-stock-alert"
               stockAvailable={stockAvailable}
@@ -900,7 +920,7 @@ function CartModal({
               disabled={!canSubmit}
               style={{ opacity: canSubmit ? 1 : 0.5 }}
             >
-              <IconWhatsapp size={16} /> {stockExceeded ? 'Ajusta el pedido' : 'Pedir'}
+              <IconWhatsapp size={16} /> {(stockExceeded || limitExceeded) ? 'Ajusta el pedido' : 'Pedir'}
             </button>
           </div>
         }
