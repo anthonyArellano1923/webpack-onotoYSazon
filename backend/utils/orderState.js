@@ -20,6 +20,18 @@ const LIVE_ORDER_SQL_O = "o.status != 'cancelado' AND (o.confirmed_at IS NOT NUL
 const PENDING_REVIEW_SQL = "status != 'cancelado' AND confirmed_at IS NULL AND expires_at > datetime('now')";
 const EXPIRED_REVIEW_SQL = "status != 'cancelado' AND confirmed_at IS NULL AND expires_at <= datetime('now')";
 
+// STOCK FASE 2: el ledger de stock_movements guarda también los asientos de
+// los pedidos ('venta' reserva, 'reverso' libera), pero esos asientos son la
+// HISTORIA fechada, no la fuente del número: el vencimiento de una reserva web
+// no tiene quién lo escriba en el instante en que ocurre (LIVE_ORDER_SQL lo
+// evalúa en cada consulta), así que si sumaran al stock, el número se movería
+// recién cuando alguien materializa el vencimiento. El stock sigue siendo
+//   Σ movimientos CONTADOS − Σ ventas vivas
+// y 'merma' cuenta porque es hallaca perdida de verdad (A3), no una reserva.
+const COUNTED_MOVEMENT_SQL = "kind IN ('ajuste','tanda','merma')";
+// Asientos sombra de los pedidos: su suma por pedido = −reserva actual.
+const ORDER_LEDGER_SQL = "kind IN ('venta','reverso')";
+
 // Valores ya avisados: el warning se emite una sola vez por variable, no en
 // cada consulta (estas funciones se llaman por request).
 const warned = new Set();
@@ -107,6 +119,8 @@ module.exports = {
   LIVE_ORDER_SQL_O,
   PENDING_REVIEW_SQL,
   EXPIRED_REVIEW_SQL,
+  COUNTED_MOVEMENT_SQL,
+  ORDER_LEDGER_SQL,
   holdHours,
   reminderHours,
   maxPorTelefono,

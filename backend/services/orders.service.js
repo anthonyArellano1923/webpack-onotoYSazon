@@ -18,6 +18,7 @@ const { getCurrentBatchId } = require('../controllers/batches.controller');
 const { LIVE_ORDER_SQL } = require('../utils/orderState');
 const { httpError } = require('../utils/httpError');
 const { isMontoClp, MONTO_RANGE_MSG } = require('../utils/limits');
+const { syncOrderLedger } = require('./ledger');
 
 // Tope de rango de una venta, alineado con R-5 (checkout), MAX_DELTA
 // (movimientos de stock) y MAX_CANTIDAD (tandas).
@@ -144,7 +145,7 @@ function createSale(input) {
     // PLAN-11 — INVARIANTE DEL BACKFILL: la venta manual nace con
     // confirmed_at fijado, así que nunca queda con confirmed_at y expires_at
     // ambos en NULL (ver addOrdersReviewColumns en migrate.js).
-    return db.prepare(`
+    const id = db.prepare(`
       INSERT INTO orders (customer_name, customer_phone, quantity_hallacas, total_clp, payment_method, status, notes, delivery, source, batch_id, stock_exempt, confirmed_at, expires_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'admin', ?, ?, datetime('now'), NULL)
     `).run(
@@ -159,6 +160,10 @@ function createSale(input) {
       batchId,
       esEncargo ? 1 : 0
     ).lastInsertRowid;
+    // STOCK FASE 2: asiento de la venta en el mismo commit (un encargo no
+    // reserva, así que no escribe nada hasta concretarse).
+    syncOrderLedger(id);
+    return id;
   });
 
   return { id: Number(insertSale.immediate()), esEncargo };
@@ -244,6 +249,12 @@ function updateSale(id, input, opts = {}) {
     // PLAN-12: guardia del llamador sobre el estado actual, bajo el lock.
     if (opts.precondition) opts.precondition(order);
 
+    // STOCK FASE 2: antes de cambiar nada, el ledger se pone al día con el
+    // estado ACTUAL. Si la reserva venció sin que nadie lo anotara, acá se
+    // escribe su reverso con la fecha del vencimiento; así la confirmación
+    // tardía queda como una reactivación con la fecha de hoy.
+    syncOrderLedger(id);
+
     if (confirmingStock && order.stock_exempt !== 1) {
       throw httpError(409, 'Este pedido ya reserva stock o no corresponde a un encargo.');
     }
@@ -328,6 +339,9 @@ function updateSale(id, input, opts = {}) {
     }
 
     db.prepare(`UPDATE orders SET ${updates.join(', ')} WHERE id = ?`).run(...values, id);
+    // STOCK FASE 2: asiento de lo que cambió la reserva (cancelar, reactivar,
+    // confirmar un vencido, cambiar la cantidad, concretar un encargo).
+    syncOrderLedger(id);
     return { finalQty, finalTotal };
   });
 

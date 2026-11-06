@@ -5,6 +5,7 @@ const { getStock } = require('./packs.controller');
 const { LIVE_ORDER_SQL, holdHours, maxPorTelefono, reviewState } = require('../utils/orderState');
 const { CONTACT_SELLER_MSG, httpError, sendError } = require('../utils/httpError');
 const notify = require('../services/notify');
+const { syncOrderLedger } = require('../services/ledger');
 
 function createOrder(req, res) {
   const { name, phone, items, delivery, address, dateHint, notes, quantityHallacas } = req.body;
@@ -158,6 +159,9 @@ function createOrder(req, res) {
     for (const item of canonicalItems) {
       insertItem.run(orderId, item.packId, item.packName, item.qty, item.priceAtTime ?? null);
     }
+
+    // STOCK FASE 2: asiento de la reserva en el mismo commit que el pedido.
+    syncOrderLedger(orderId);
 
     return orderId;
   });

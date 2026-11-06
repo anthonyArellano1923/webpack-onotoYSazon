@@ -1,11 +1,17 @@
 const { db } = require('../database/db');
-const { LIVE_ORDER_SQL, holdHours, maxPorTelefono } = require('../utils/orderState');
+const {
+  LIVE_ORDER_SQL, COUNTED_MOVEMENT_SQL, holdHours, maxPorTelefono,
+} = require('../utils/orderState');
 
 /**
  * ADR-3 (plan 09, supersede ADR-2): EL STOCK ES UN DATO PROPIO, no una fórmula
  * sobre las tandas.
  *
- *   stock = Σ stock_movements.delta − Σ ventas vivas.quantity_hallacas
+ *   stock = Σ stock_movements.delta (contados) − Σ ventas vivas.quantity_hallacas
+ *
+ * STOCK FASE 2: los asientos de pedidos ('venta'/'reverso') viven en la misma
+ * tabla pero quedan fuera de la suma (COUNTED_MOVEMENT_SQL): son la historia
+ * fechada de las reservas, que se siguen restando derivadas de `orders`.
  *
  * - `stock_movements` son ingresos/egresos con motivo obligatorio: los crea el
  *   dueño a mano, o el sistema al registrar una tanda (movimiento independiente).
@@ -30,6 +36,7 @@ const { LIVE_ORDER_SQL, holdHours, maxPorTelefono } = require('../utils/orderSta
 function getStock(conn = db) {
   const { movimientos } = conn.prepare(`
     SELECT COALESCE(SUM(delta), 0) AS movimientos FROM stock_movements
+    WHERE ${COUNTED_MOVEMENT_SQL}
   `).get();
   const { comprometidas } = conn.prepare(`
     SELECT COALESCE(SUM(quantity_hallacas), 0) AS comprometidas
@@ -53,6 +60,7 @@ function getStockBreakdown() {
       COALESCE(SUM(CASE WHEN delta > 0 THEN delta END), 0)  AS ingresos,
       COALESCE(SUM(CASE WHEN delta < 0 THEN -delta END), 0) AS egresos
     FROM stock_movements
+    WHERE ${COUNTED_MOVEMENT_SQL}
   `).get();
   const { comprometidas } = db.prepare(`
     SELECT COALESCE(SUM(quantity_hallacas), 0) AS comprometidas

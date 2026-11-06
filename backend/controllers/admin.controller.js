@@ -8,6 +8,7 @@ const { isMontoClp, MONTO_RANGE_MSG } = require('../utils/limits');
 const {
   createSale, updateSale,
 } = require('../services/orders.service');
+const { syncOrderLedger } = require('../services/ledger');
 
 // PLAN-12: vocabulario y topes viven en services/orders.service.js.
 
@@ -133,7 +134,13 @@ function deleteOrder(req, res) {
   const order = db.prepare('SELECT id FROM orders WHERE id = ?').get(id);
   if (!order) return res.status(404).json({ error: 'Pedido no encontrado.' });
 
-  db.prepare('DELETE FROM orders WHERE id = ?').run(id);
+  // STOCK FASE 2: el ledger registra que la reserva se liberó antes de que la
+  // fila desaparezca (primero se pone al día un vencimiento pendiente).
+  db.transaction(() => {
+    syncOrderLedger(id);
+    syncOrderLedger(id, { target: 0, reason: `Eliminación del pedido #${id}` });
+    db.prepare('DELETE FROM orders WHERE id = ?').run(id);
+  }).immediate();
   return res.json({ message: 'Venta eliminada' });
 }
 

@@ -1,7 +1,7 @@
 const { db } = require('../database/db');
 const { getStock, getStockBreakdown } = require('./packs.controller');
 const { esFechaValida } = require('../utils/fecha');
-const { LIVE_ORDER_SQL } = require('../utils/orderState');
+const { LIVE_ORDER_SQL, COUNTED_MOVEMENT_SQL } = require('../utils/orderState');
 
 /**
  * ADR-3 (plan 09): el stock es un dato propio que vive en `stock_movements`.
@@ -32,6 +32,7 @@ function getKardex(req, res) {
     const movimientos = db.prepare(`
       SELECT id, occurred_at, delta, reason, kind, batch_ref, created_at
       FROM stock_movements
+      WHERE ${COUNTED_MOVEMENT_SQL}
     `).all().map((m) => ({
       tipo: 'movimiento',
       id: m.id,
@@ -160,9 +161,14 @@ function createMovement(req, res) {
 function deleteMovement(req, res) {
   const { id } = req.params;
   const movement = db.prepare(
-    'SELECT id, delta, kind, reason FROM stock_movements WHERE id = ?'
+    'SELECT id, delta, kind, reason, order_id FROM stock_movements WHERE id = ?'
   ).get(id);
   if (!movement) return res.status(404).json({ error: 'Movimiento no encontrado.' });
+  // STOCK FASE 2: los asientos de pedidos (venta, reverso, merma) son la
+  // historia de una venta; se corrigen desde la venta, no borrando su asiento.
+  if (movement.order_id !== null || !['ajuste', 'tanda'].includes(movement.kind)) {
+    return res.status(409).json({ error: 'Este asiento pertenece a un pedido: corrígelo desde la pestaña Ventas.' });
+  }
 
   try {
     db.prepare('DELETE FROM stock_movements WHERE id = ?').run(id);

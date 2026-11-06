@@ -132,8 +132,16 @@ CREATE TABLE IF NOT EXISTS stock_movements (
   occurred_at TEXT    NOT NULL DEFAULT (date('now','localtime')),
   delta       INTEGER NOT NULL CHECK(delta <> 0),
   reason      TEXT    NOT NULL CHECK(length(trim(reason)) >= 3),
-  kind        TEXT    NOT NULL DEFAULT 'ajuste' CHECK(kind IN ('ajuste','tanda')),
+  -- STOCK FASE 2: 'venta' (reserva de un pedido) y 'reverso' (la libera) son
+  -- asientos sombra con order_id: historia fechada, NO entran al stock (ver
+  -- COUNTED_MOVEMENT_SQL en utils/orderState.js). 'merma' (A3) sí cuenta.
+  kind        TEXT    NOT NULL DEFAULT 'ajuste'
+                CHECK(kind IN ('ajuste','tanda','venta','reverso','merma')),
   batch_ref   INTEGER,
+  -- STOCK FASE 2: pedido que originó el asiento (NULL en ajustes y tandas).
+  -- Su índice se crea en migrate.js: en una BD existente la columna todavía no
+  -- existe cuando corre este archivo.
+  order_id    INTEGER REFERENCES orders(id) ON DELETE SET NULL,
   created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );

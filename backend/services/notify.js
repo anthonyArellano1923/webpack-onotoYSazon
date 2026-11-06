@@ -13,6 +13,7 @@
 const { db } = require('../database/db');
 const { reminderHours, parseUtc } = require('../utils/orderState');
 const { phoneToWa } = require('../utils/phone');
+const { materializeExpirations } = require('./ledger');
 
 const SEND_TIMEOUT_MS = 5000;
 const SWEEP_INTERVAL_MS = 10 * 60 * 1000;
@@ -173,6 +174,13 @@ async function sweepOnce() {
   sweeping = true;
   const marked = { reminders: 0, expired: 0 };
   try {
+    // STOCK FASE 2: el reverso de las reservas vencidas va al ledger aunque
+    // Telegram no responda; el aviso es aparte y puede reintentarse.
+    try {
+      materializeExpirations();
+    } catch (err) {
+      console.error('[ledger] no se pudieron registrar los vencimientos:', err);
+    }
     const porVencer = db.prepare(`
       SELECT * FROM orders
       WHERE confirmed_at IS NULL AND status != 'cancelado' AND reminder_sent_at IS NULL

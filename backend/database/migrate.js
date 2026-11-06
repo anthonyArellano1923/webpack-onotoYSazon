@@ -348,6 +348,91 @@ function addOrdersReviewColumns(db) {
   `);
 }
 
+/* ---- stock_movements: ledger completo (STOCK FASE 2) ---- */
+
+// STOCK FASE 2: forma final de stock_movements. Cualquier recreación futura de
+// la tabla debe copiar order_id: sin él los asientos de pedidos quedan
+// huérfanos y el kardex pierde su historia.
+const STOCK_MOVEMENTS_FINAL_SQL = `
+  CREATE TABLE stock_movements_new (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    occurred_at TEXT    NOT NULL DEFAULT (date('now','localtime')),
+    delta       INTEGER NOT NULL CHECK(delta <> 0),
+    reason      TEXT    NOT NULL CHECK(length(trim(reason)) >= 3),
+    kind        TEXT    NOT NULL DEFAULT 'ajuste'
+                  CHECK(kind IN ('ajuste','tanda','venta','reverso','merma')),
+    batch_ref   INTEGER,
+    order_id    INTEGER REFERENCES orders(id) ON DELETE SET NULL,
+    created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );`;
+
+/**
+ * Seeds the order ledger: one 'venta' row per order that reserves stock today
+ * (live and not exempt), dated on the order's local creation day, which is
+ * exactly the line the derived kardex showed for it. Orders already present in
+ * the ledger are skipped, so a second run inserts nothing.
+ * @param {import('better-sqlite3').Database} db
+ * @returns {number} Rows inserted.
+ */
+function backfillOrderLedger(db) {
+  // Requerido acá (no arriba) para no cargar utils en el arranque de los
+  // tests que solo usan withTableSwap.
+  const { LIVE_ORDER_SQL_O } = require('../utils/orderState');
+  const { changes } = db.prepare(`
+    INSERT INTO stock_movements (occurred_at, delta, reason, kind, order_id, created_at)
+    SELECT date(o.created_at, 'localtime'), -o.quantity_hallacas,
+           'Pedido #' || o.id || ' de ' || COALESCE(NULLIF(o.customer_name, ''), 'cliente')
+             || CASE WHEN o.status = 'cortesia' THEN ' (cortesía)' ELSE '' END,
+           'venta', o.id, o.created_at
+    FROM orders o
+    WHERE ${LIVE_ORDER_SQL_O}
+      AND o.stock_exempt = 0 AND o.quantity_hallacas > 0
+      AND NOT EXISTS (SELECT 1 FROM stock_movements m WHERE m.order_id = o.id)
+  `).run();
+  return changes;
+}
+
+/**
+ * Widens stock_movements.kind (venta/reverso/merma) and adds order_id, keeping
+ * ids and the AUTOINCREMENT counter; then backfills the order ledger. Runs once
+ * (detected by 'merma' in the CHECK); indexes are recreated on every startup.
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateStockMovementsLedger(db) {
+  if (!tableSql(db, 'stock_movements').includes('merma')) {
+    console.log('→ Migrando stock_movements al ledger completo (STOCK FASE 2)...');
+    const seq = db.prepare(
+      "SELECT seq FROM sqlite_sequence WHERE name = 'stock_movements'"
+    ).get()?.seq ?? 0;
+    withTableSwap(db, () => {
+      db.exec(`
+        ${STOCK_MOVEMENTS_FINAL_SQL}
+
+        INSERT INTO stock_movements_new (id, occurred_at, delta, reason, kind, batch_ref, created_by, created_at)
+        SELECT id, occurred_at, delta, reason, kind, batch_ref, created_by, created_at
+        FROM stock_movements;
+
+        DROP TABLE stock_movements;
+        ALTER TABLE stock_movements_new RENAME TO stock_movements;
+      `);
+      // Un id de movimiento borrado no debe reutilizarse: el kardex y la
+      // papelera del panel se refieren a los movimientos por id.
+      db.prepare(
+        "UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'stock_movements'"
+      ).run(seq);
+      const n = backfillOrderLedger(db);
+      console.log(`✓ stock_movements migrado; ${n} asiento(s) de venta sembrados.`);
+    });
+  }
+  // El swap borra los índices de la tabla vieja: se recrean siempre.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_stock_movements_fecha ON stock_movements(occurred_at DESC, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_stock_movements_created_by ON stock_movements(created_by);
+    CREATE INDEX IF NOT EXISTS idx_stock_movements_order ON stock_movements(order_id);
+  `);
+}
+
 /* ---- users: login por teléfono (phone UNIQUE, email opcional, address) ---- */
 function migrateUsersTable(db) {
   const cols = tableColumns(db, 'users');
@@ -468,8 +553,13 @@ function runMigrations(db) {
   // PLAN-11: al final de las migraciones de orders, después de todo swap, para
   // que ninguna recreación de la tabla borre las columnas nuevas.
   addOrdersReviewColumns(db);
+  // STOCK FASE 2: después de las columnas de revisión, porque el backfill del
+  // ledger usa LIVE_ORDER_SQL (confirmed_at, expires_at).
+  migrateStockMovementsLedger(db);
   seedSettings(db);
   seedPacks(db);
 }
 
-module.exports = { runMigrations, withTableSwap, addOrdersReviewColumns };
+module.exports = {
+  runMigrations, withTableSwap, addOrdersReviewColumns, backfillOrderLedger,
+};
