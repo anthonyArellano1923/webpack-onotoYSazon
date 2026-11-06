@@ -2,6 +2,9 @@ const { db } = require('../database/db');
 const { normalizePhone } = require('../utils/phone');
 const { getCurrentBatchId } = require('./batches.controller');
 const { getStock } = require('./packs.controller');
+const { LIVE_ORDER_SQL, holdHours, maxPorTelefono, reviewState } = require('../utils/orderState');
+const { CONTACT_SELLER_MSG, httpError, sendError } = require('../utils/httpError');
+const notify = require('../services/notify');
 
 function createOrder(req, res) {
   const { name, phone, items, delivery, address, dateHint, notes, quantityHallacas } = req.body;
@@ -92,22 +95,44 @@ function createOrder(req, res) {
     return res.status(400).json({ error: 'El total calculado está fuera de rango.' });
   }
 
+  const hours = holdHours();
+  const limite = maxPorTelefono();
+
+  // PLAN-11 (M5): .immediate() toma el lock de escritura al empezar. Con una
+  // transacción diferida, el límite y el stock leídos podían quedar obsoletos
+  // antes del INSERT si otra escritura se colaba entre medio.
   const insertOrder = db.transaction(() => {
-    // Validación final dentro de la misma transacción que registra la venta.
-    // Así el stock que aprobamos es el que inmediatamente queda reservado.
+    // a) PLAN-11 (D6): máximo de hallacas web activas por teléfono. Cuentan
+    // solo pedidos web vivos y no entregados, incluidos los encargos; con
+    // sesión, también los del mismo user_id aunque usara otro teléfono.
+    const { activas } = db.prepare(`
+      SELECT COALESCE(SUM(quantity_hallacas), 0) AS activas FROM orders
+      WHERE source = 'web' AND delivered_at IS NULL AND ${LIVE_ORDER_SQL}
+        AND (customer_phone = ? OR (? IS NOT NULL AND user_id = ?))
+    `).get(customerPhone, userId, userId);
+    if (activas + qtyHallacas > limite) {
+      throw httpError(409, CONTACT_SELLER_MSG, 'LIMITE_TELEFONO');
+    }
+
+    // b) Validación final del stock dentro de la misma transacción que
+    // registra la venta: el stock aprobado es el que queda reservado. Los
+    // encargos no reservan stock (H-2).
     if (!soloPorEncargo) {
       const stock = getStock();
       if (qtyHallacas > stock) {
-        const error = new Error('No hay stock suficiente para esa cantidad. Elige otro pack o contáctanos para dejar un encargo.');
-        error.statusCode = 409;
-        throw error;
+        console.warn(`[stock] pedido rechazado: pide ${qtyHallacas}, stock ${stock}`);
+        throw httpError(409, CONTACT_SELLER_MSG, 'SIN_STOCK');
       }
     }
 
+    // c) PLAN-11 — INVARIANTE DEL BACKFILL (migrate.js, addOrdersReviewColumns):
+    // todo pedido web nace con expires_at NOT NULL y confirmed_at NULL. Si este
+    // INSERT dejara ambos en NULL, el backfill del siguiente arranque lo daría
+    // por confirmado y reservaría stock para siempre (el bug C1).
     const batchId = getCurrentBatchId();
     const orderResult = db.prepare(`
-      INSERT INTO orders (user_id, customer_name, customer_phone, delivery, address, date_hint, notes, total_clp, quantity_hallacas, source, batch_id, stock_exempt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'web', ?, ?)
+      INSERT INTO orders (user_id, customer_name, customer_phone, delivery, address, date_hint, notes, total_clp, quantity_hallacas, source, batch_id, stock_exempt, confirmed_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'web', ?, ?, NULL, datetime('now', '+' || ? || ' hours'))
     `).run(
       userId,
       name.trim(),
@@ -120,7 +145,8 @@ function createOrder(req, res) {
       qtyHallacas,
       batchId,
       // H-2: el encargo se congela como exento acá — no se descuenta del stock.
-      soloPorEncargo ? 1 : 0
+      soloPorEncargo ? 1 : 0,
+      hours
     );
 
     const orderId = orderResult.lastInsertRowid;
@@ -136,31 +162,40 @@ function createOrder(req, res) {
     return orderId;
   });
 
+  let order;
   try {
-    const orderId = insertOrder();
-    return res.status(201).json({
-      message: soloPorEncargo
-        ? 'Pedido recibido. Te contactaremos para coordinar precio y entrega.'
-        : 'Pedido recibido. Te contactaremos pronto para confirmar.',
-      // AUDITORÍA CODEX 2026-07-15: Codex alineó la respuesta con el enum
-      // persistido; `pending` pertenecía al contrato legado anterior al QA-16.
-      order: { id: orderId, status: 'pendiente_pago' },
-    });
+    const orderId = insertOrder.immediate();
+    order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
   } catch (err) {
-    if (err.statusCode) {
-      console.warn(`[stock] pedido rechazado: pide ${qtyHallacas}, stock ${getStock()}`);
-      return res.status(err.statusCode).json({ error: err.message });
-    }
-    console.error('createOrder error:', err);
-    return res.status(500).json({ error: 'Error al registrar el pedido.' });
+    return sendError(res, err, 'Error al registrar el pedido.', 'createOrder error');
   }
+
+  // PLAN-11 (D11): el aviso va DESPUÉS del commit y sin await: Telegram lento
+  // o caído nunca demora ni hace fallar el pedido.
+  notify.newOrder(order).catch((err) => console.warn('[notify] newOrder falló:', err.message));
+
+  return res.status(201).json({
+    message: soloPorEncargo
+      ? 'Pedido recibido. Te contactaremos para coordinar precio y entrega.'
+      : `Pedido recibido. Queda reservado por ${hours} h mientras el vendedor lo confirma por WhatsApp.`,
+    // AUDITORÍA CODEX 2026-07-15: Codex alineó la respuesta con el enum
+    // persistido; `pending` pertenecía al contrato legado anterior al QA-16.
+    order: {
+      id: order.id,
+      status: 'pendiente_pago',
+      review: 'por_confirmar',
+      expiresAt: order.expires_at,
+    },
+    holdHours: hours,
+  });
 }
 
 function getMyOrders(req, res) {
   const userId = req.user.id;
 
   const orders = db.prepare(`
-    SELECT id, status, delivery, date_hint, notes, total_clp, created_at, updated_at
+    SELECT id, status, delivery, date_hint, notes, total_clp, quantity_hallacas,
+           confirmed_at, expires_at, created_at, updated_at
     FROM orders WHERE user_id = ? ORDER BY created_at DESC
   `).all(userId);
 
@@ -170,7 +205,9 @@ function getMyOrders(req, res) {
   `);
 
   return res.json({
-    orders: orders.map((o) => ({ ...o, items: getItems.all(o.id) })),
+    // PLAN-11: `review` derivado para que el cliente vea si su pedido sigue
+    // por confirmar, ya fue confirmado o venció.
+    orders: orders.map((o) => ({ ...o, review: reviewState(o), items: getItems.all(o.id) })),
   });
 }
 
