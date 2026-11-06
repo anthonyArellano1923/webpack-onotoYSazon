@@ -3,8 +3,12 @@
  *
  * Recibe los updates del webhook (routes/telegram.routes.js) ya autenticados
  * por secreto. Aquí se aplica la lista blanca de chats y se traduce cada
- * comando, mensaje o botón a las MISMAS funciones del panel
+ * comando o botón a las MISMAS funciones del panel
  * (services/orders.service.js): no hay reglas de stock propias del bot.
+ *
+ * Entrada SOLO por comandos y botones (ADR-5, D7): no se interpreta texto
+ * libre. El único texto que se lee es la respuesta a un paso del flujo guiado
+ * /nuevo (nombre, cantidad, teléfono), validado campo por campo.
  *
  * Seguridad:
  * - Chat fuera de la lista blanca → se ignora en silencio (ni siquiera se
@@ -17,17 +21,45 @@
 const crypto = require('crypto');
 const { db } = require('../database/db');
 const { getStockBreakdown } = require('../controllers/packs.controller');
-const { createSale, updateSale } = require('./orders.service');
+const { createSale, updateSale, MAX_HALLACAS } = require('./orders.service');
 const { LIVE_ORDER_SQL, reviewState } = require('../utils/orderState');
+const { normalizePhone } = require('../utils/phone');
 const { callApi, fmtChile } = require('./notify');
-const { fold, parseMessage, formatOrderLine, PAY_LABEL } = require('./telegramParser');
 
 // Telegram corta en 4096; se deja margen para el texto que se agrega al editar.
 const MAX_TEXT = 3900;
-// Un borrador sin confirmar se descarta a los 30 min (ver ADR-5: memoria).
-const DRAFT_TTL_MS = 30 * 60 * 1000;
+// Un flujo /nuevo o una pregunta de stock sin responder se descarta a los 30 min.
+const STATE_TTL_MS = 30 * 60 * 1000;
 // Telegram reintenta un update si el webhook no respondió a tiempo.
 const SEEN_UPDATES_MAX = 500;
+// Inline keyboard de /pedidos: una fila por pedido, con tope para no exceder
+// el límite de botones de Telegram.
+const MAX_LIST_ROWS = 30;
+const MAX_NAME = 100;
+
+const PAY_LABEL = { pagado: 'Pagado', pendiente_pago: 'Pendiente de pago', cortesia: 'Cortesía', cancelado: 'Cancelado' };
+
+/**
+ * Lowercases, strips diacritics and collapses whitespace (para comparar nombres).
+ * @param {string} s
+ * @returns {string}
+ */
+function fold(s) {
+  return String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * One readable line per order (solo salida: el bot no vuelve a leerla).
+ * @param {object} o - orders row.
+ * @returns {string} e.g. "#12 Elías — 4 hallacas — Pagado — por entregar"
+ */
+function formatOrder(o) {
+  const bits = [`#${o.id} ${o.customer_name}`, `${o.quantity_hallacas} hallacas`];
+  if (o.stock_exempt === 1) bits.push('encargo');
+  bits.push(PAY_LABEL[o.status] || o.status);
+  bits.push(o.delivered_at ? 'entregado' : 'por entregar');
+  return bits.join(' — ');
+}
 
 /* ============================== Configuración ============================== */
 
@@ -208,7 +240,7 @@ function runAction(action, id, force = false) {
     return {
       ok: true,
       toast: `#${id} ${def.label}`,
-      text: `✅ #${id} ${o.customer_name}: ${def.label}.\n${formatOrderLine(o)}`,
+      text: `✅ #${id} ${o.customer_name}: ${def.label}.\n${formatOrder(o)}`,
       markup: buttonsFor(o),
     };
   } catch (err) {
@@ -247,29 +279,37 @@ function describeError(err, id, action) {
   return { ok: false, toast: 'Error', text: `⚠️ #${id}: error interno; revisa el panel.` };
 }
 
-/* ============================== Borradores (formato de Notas) ============================== */
+/**
+ * Generic "random token" for flows and force questions (fits in callback_data).
+ * @returns {string} 12 hex chars.
+ */
+function newToken() {
+  return crypto.randomBytes(6).toString('hex');
+}
 
-// token → { chatId, items, expiresAt }. En memoria a propósito (ADR-5): un
-// reinicio de Render solo obliga a reenviar el mensaje; no se pierde un pedido.
+/* ============================== Pregunta de stock (force) ============================== */
+
+// token → { chatId, input, expiresAt }. En memoria a propósito (ADR-5, D8):
+// un reinicio de Render solo obliga a repetir /nuevo; no se pierde un pedido.
 const drafts = new Map();
 
 /**
- * Stores a draft and returns its token (fits in the 64-byte callback_data).
+ * Stores a pending forced sale and returns its token.
  * @param {string|number} chatId
- * @param {Array<object>} items
+ * @param {object} input - createSale input (already with force: true).
  * @returns {string}
  */
-function saveDraft(chatId, items) {
+function saveDraft(chatId, input) {
   const now = Date.now();
   for (const [k, d] of drafts) if (d.expiresAt <= now) drafts.delete(k);
-  const token = crypto.randomBytes(6).toString('hex');
-  drafts.set(token, { chatId: String(chatId), items, expiresAt: now + DRAFT_TTL_MS });
+  const token = newToken();
+  drafts.set(token, { chatId: String(chatId), input, expiresAt: now + STATE_TTL_MS });
   return token;
 }
 
 /**
- * Takes (and removes) a draft. Se borra ANTES de aplicar: un doble toque en
- * "Confirmar" no puede registrar dos veces.
+ * Takes (and removes) a pending sale. Se borra ANTES de aplicar: un doble
+ * toque no puede registrar dos veces.
  * @param {string} token
  * @param {string|number} chatId
  * @returns {object|null}
@@ -283,148 +323,36 @@ function takeDraft(token, chatId) {
 }
 
 /**
- * Human label of a parsed line, in the Notes format.
- * @param {object} p - Parsed line.
- * @returns {string}
- */
-function describeParsed(p) {
-  const bits = [];
-  if (p.qty !== null) bits.push(`${p.qty} hallacas`);
-  if (p.encargo) bits.push('encargo');
-  if (p.pay) bits.push(PAY_LABEL[p.pay].toLowerCase());
-  if (p.delivered !== null) bits.push(p.delivered ? 'entregado' : 'por entregar');
-  if (p.phone) bits.push(p.phone);
-  return bits.join(', ');
-}
-
-/**
- * Validates a `#ID` line against the DB and builds the updateSale input.
- * Nombre, cantidad y encargo deben coincidir: si no, se señala y no se aplica
- * (el dueño pudo equivocarse de ID).
- * @param {object} p - Parsed line with id.
- * @returns {{error?: string, input?: object, label?: string, unchanged?: boolean}}
- */
-function planUpdate(p) {
-  const o = getOrderRow(p.id);
-  if (!o) return { error: `#${p.id} no existe` };
-  if (o.status === 'cancelado') return { error: `#${p.id} está cancelado` };
-  if (p.name && fold(p.name) !== fold(o.customer_name)) {
-    return { error: `#${p.id} es de «${o.customer_name}», no de «${p.name}»` };
-  }
-  if (p.qty !== null && p.qty !== o.quantity_hallacas) {
-    return { error: `#${p.id} tiene ${o.quantity_hallacas} hallacas, no ${p.qty} (cámbialo en el panel)` };
-  }
-  if (p.encargo && o.stock_exempt !== 1) return { error: `#${p.id} no es un encargo` };
-  if (p.phone) return { error: `#${p.id}: el teléfono se cambia en el panel` };
-
-  const input = {};
-  if (p.pay && p.pay !== o.status) input.status = p.pay;
-  if (p.delivered === true && !o.delivered_at) input.delivered = true;
-  if (p.delivered === false && o.delivered_at) input.delivered = false;
-  const label = `#${o.id} ${o.customer_name}: ${describeParsed({ ...p, qty: null, encargo: false })}`;
-  if (Object.keys(input).length === 0) return { unchanged: true, label };
-  return { input, label };
-}
-
-/**
- * Handles a message in the Notes format: replies with a summary and
- * Confirmar/Cancelar buttons. Nothing is written until the owner confirms.
+ * Registers a new sale (same rule as the panel's manual sale) and builds the reply.
  * @param {string|number} chatId
- * @param {string} text
+ * @param {object} input - createSale input.
+ * @returns {{text: string, markup?: object}}
  */
-async function handleNotes(chatId, text) {
-  const lines = parseMessage(text);
-  const items = [];
-  const shown = [];
-  const problems = [];
-  const ignored = [];
-
-  for (const l of lines) {
-    if (l.kind === 'header') { ignored.push(`  línea ${l.n}: «${l.raw}» (encabezado)`); continue; }
-    if (l.kind === 'error') { problems.push(`  línea ${l.n}: «${l.raw}» → ${l.reason}`); continue; }
-    if (l.id !== null) {
-      const plan = planUpdate(l);
-      if (plan.error) { problems.push(`  línea ${l.n}: ${plan.error}`); continue; }
-      if (plan.unchanged) { ignored.push(`  línea ${l.n}: ${plan.label} (sin cambios)`); continue; }
-      items.push({ kind: 'update', id: l.id, input: plan.input, label: plan.label });
-      shown.push(`${items.length}. Actualizar ${plan.label}`);
-      continue;
-    }
-    const input = {
-      customerName: l.name,
-      quantityHallacas: l.qty,
-      status: l.pay || 'pendiente_pago',
-      ...(l.phone ? { customerPhone: l.phone } : {}),
-      ...(l.encargo ? { encargo: true } : {}),
-    };
-    const label = `${l.name}: ${describeParsed({ ...l, pay: input.status, delivered: l.delivered === true })}`;
-    // Pegar dos veces la misma lista duplicaría pedidos: se avisa, no se adivina.
-    const dup = db.prepare(`SELECT id, customer_name, quantity_hallacas FROM orders WHERE ${LIVE_ORDER_SQL}`)
-      .all().filter((o) => fold(o.customer_name) === fold(l.name));
-    const warn = dup.length ? ` (ojo: ya existe ${dup.map((o) => `#${o.id} con ${o.quantity_hallacas}`).join(', ')})` : '';
-    items.push({ kind: 'new', input, delivered: l.delivered === true, label });
-    shown.push(`${items.length}. Nuevo: ${label}${warn}`);
-  }
-
-  const out = [];
-  if (items.length) out.push(`Voy a registrar ${items.length} ${items.length === 1 ? 'cambio' : 'cambios'}:`, ...shown);
-  if (problems.length) out.push('', 'No entendí (no se aplica):', ...problems);
-  if (ignored.length) out.push('', 'Ignoradas:', ...ignored);
-  if (!items.length) {
-    if (!problems.length) out.push('Nada que registrar.');
-    out.push('', 'Formato: «Nombre: 4. Pagado. Por entregar.» — /ayuda para más.');
-    return reply(chatId, out.join('\n'));
-  }
-  const token = saveDraft(chatId, items);
-  return reply(chatId, out.join('\n'), {
-    inline_keyboard: [[
-      { text: '✅ Confirmar', callback_data: `d:${token}:ok` },
-      { text: '✖️ Cancelar', callback_data: `d:${token}:no` },
-    ]],
-  });
-}
-
-/**
- * Applies one draft item. A new sale and its "entregado" mark go in ONE
- * transaction (savepoints anidados de better-sqlite3), así no queda media venta.
- * @param {object} item
- * @returns {{line: string, forceItem?: object, quedaria?: number}}
- */
-function applyItem(item) {
+function registerSale(chatId, input) {
   try {
-    if (item.kind === 'new') {
-      const id = db.transaction(() => {
-        const created = createSale(item.input);
-        if (item.delivered) updateSale(created.id, { delivered: true });
-        return created.id;
-        // .immediate(): el lock se toma al empezar (ADR-4 §7); los
-        // .immediate() internos pasan a ser savepoints.
-      }).immediate();
-      return { line: `✅ #${id} ${item.label}` };
-    }
-    updateSale(item.id, item.input, {
-      precondition(o) {
-        // Revalida al aplicar: pudo cancelarse entre el resumen y el botón.
-        if (o.status === 'cancelado') throw noop(`#${o.id} se canceló mientras tanto; no se cambió.`);
-      },
-    });
-    return { line: `✅ ${item.label}` };
+    const { id } = createSale(input);
+    const o = getOrderRow(id);
+    return { text: `✅ Registrado: ${formatOrder(o)}`, markup: buttonsFor(o) };
   } catch (err) {
     if (err.businessCode === 'STOCK_INSUFICIENTE') {
+      const quedaria = err.extra.stock - err.extra.requerido;
+      const t = saveDraft(chatId, { ...input, force: true });
       return {
-        line: `⚠️ ${item.label}: stock insuficiente (pregunto aparte)`,
-        forceItem: { ...item, input: { ...item.input, force: true } },
-        quedaria: err.extra.stock - err.extra.requerido,
+        text: `⚠️ ${input.customerName}: ${input.quantityHallacas} hallacas.\nEsto deja el stock en ${quedaria}. ¿Registrar igual?`,
+        markup: { inline_keyboard: [[
+          { text: '⚠️ Registrar igual', callback_data: `d:${t}:ok` },
+          { text: '✖️ No', callback_data: `d:${t}:no` },
+        ]] },
       };
     }
-    if (err.noop || err.statusCode) return { line: `⚠️ ${item.label}: ${err.message}` };
-    console.error('[telegram] borrador falló:', err);
-    return { line: `⚠️ ${item.label}: error interno; revisa el panel.` };
+    if (err.statusCode) return { text: `⚠️ No se registró: ${err.message}` };
+    console.error('[telegram] registro falló:', err);
+    return { text: '⚠️ Error interno; revisa el panel.' };
   }
 }
 
 /**
- * Callback of a draft button (d:<token>:ok|no).
+ * Callback of the "Registrar igual" question (d:<token>:ok|no).
  * @param {object} cq - callback_query.
  * @param {string} token
  * @param {string} choice - 'ok' or 'no'.
@@ -435,35 +363,215 @@ async function handleDraftCallback(cq, token, choice) {
   const original = cq.message.text || '';
   if (!draft) {
     await callApi('answerCallbackQuery', { callback_query_id: cq.id, text: 'Expiró o ya se aplicó' });
-    return editMessage(cq.message, `${original}\n\n⌛ Este resumen expiró o ya se aplicó. Reenvía el mensaje.`);
+    return editMessage(cq.message, `${original}\n\n⌛ Esta pregunta expiró o ya se respondió. Usa /nuevo de nuevo.`);
   }
   if (choice !== 'ok') {
+    await callApi('answerCallbackQuery', { callback_query_id: cq.id, text: 'No registrado' });
+    return editMessage(cq.message, `${original}\n\n✖️ No se registró.`);
+  }
+  const r = registerSale(chatId, draft.input);
+  await callApi('answerCallbackQuery', { callback_query_id: cq.id, text: 'Listo' });
+  return editMessage(cq.message, `${original}\n\n${r.text}`, r.markup);
+}
+
+/* ============================== Flujo guiado /nuevo ============================== */
+
+// chatId → { token, step, data, expiresAt }. Un flujo por chat; el token va en
+// los botones para que los de un flujo anterior no actúen sobre el actual.
+const flows = new Map();
+
+const STEPS = {
+  name: '(1/5) ¿Nombre del cliente?',
+  qty: '(2/5) ¿Cuántas hallacas? (número entero)',
+  phone: '(3/5) Teléfono del cliente (9 dígitos, ej. 912345678) o toca «Sin teléfono».',
+  pay: '(4/5) ¿Pagado o pendiente de pago?',
+  encargo: '(5/5) ¿Es encargo para la próxima tanda? (un encargo no descuenta stock)',
+};
+
+/**
+ * Inline keyboard of a flow step.
+ * @param {object} f - Flow.
+ * @returns {object}
+ */
+function flowKeyboard(f) {
+  const cb = (c) => `n:${f.token}:${c}`;
+  const cancel = { text: '✖️ Cancelar', callback_data: cb('no') };
+  if (f.step === 'phone') return { inline_keyboard: [[{ text: 'Sin teléfono', callback_data: cb('nophone') }, cancel]] };
+  if (f.step === 'pay') {
+    return { inline_keyboard: [[{ text: '💰 Pagado', callback_data: cb('pp') }, { text: 'Pendiente de pago', callback_data: cb('pu') }], [cancel]] };
+  }
+  if (f.step === 'encargo') {
+    return { inline_keyboard: [[{ text: 'Sí, encargo', callback_data: cb('e1') }, { text: 'No', callback_data: cb('e0') }], [cancel]] };
+  }
+  if (f.step === 'confirm') {
+    return { inline_keyboard: [[{ text: '✅ Confirmar', callback_data: cb('ok') }, cancel]] };
+  }
+  return { inline_keyboard: [[cancel]] };
+}
+
+/**
+ * Summary shown before registering.
+ * @param {object} d - Flow data.
+ * @returns {string}
+ */
+function flowSummary(d) {
+  const lines = [
+    'Resumen del pedido:',
+    `Cliente: ${d.name}`,
+    `Hallacas: ${d.qty}`,
+    `Teléfono: ${d.phone || '(sin teléfono)'}`,
+    `Pago: ${PAY_LABEL[d.pay]}`,
+    `Encargo: ${d.encargo ? 'sí (no descuenta stock)' : 'no'}`,
+  ];
+  // Nombre repetido: se avisa con los #ID para no duplicar un pedido por error.
+  const dup = db.prepare(`SELECT id, customer_name, quantity_hallacas FROM orders WHERE ${LIVE_ORDER_SQL}`)
+    .all().filter((o) => fold(o.customer_name) === fold(d.name));
+  if (dup.length) lines.push('', `Ojo: ya existe ${dup.map((o) => `#${o.id} con ${o.quantity_hallacas}`).join(', ')}.`);
+  return lines.join('\n');
+}
+
+/**
+ * Sends the prompt of the flow's current step.
+ * @param {string|number} chatId
+ * @param {object} f
+ */
+function askStep(chatId, f) {
+  f.expiresAt = Date.now() + STATE_TTL_MS;
+  const text = f.step === 'confirm' ? flowSummary(f.data) : STEPS[f.step];
+  return reply(chatId, text, flowKeyboard(f));
+}
+
+/**
+ * Returns the live flow of a chat, dropping it when expired.
+ * @param {string|number} chatId
+ * @returns {object|null}
+ */
+function getFlow(chatId) {
+  const f = flows.get(String(chatId));
+  if (!f) return null;
+  if (f.expiresAt <= Date.now()) { flows.delete(String(chatId)); return null; }
+  return f;
+}
+
+/**
+ * /nuevo [nombre cantidad]: starts the guided flow.
+ * @param {string|number} chatId
+ * @param {string[]} args
+ */
+function startFlow(chatId, args) {
+  const f = { token: newToken(), step: 'name', data: { name: null, qty: null, phone: null, pay: null, encargo: null } };
+  // Atajo /nuevo <nombre> <cantidad>: el último argumento debe ser la cantidad.
+  if (args.length) {
+    const last = args[args.length - 1];
+    const name = args.slice(0, -1).join(' ').trim();
+    const qty = /^\d+$/.test(last) ? Number(last) : NaN;
+    if (!name || !Number.isInteger(qty) || qty < 1 || qty > MAX_HALLACAS || name.length > MAX_NAME) {
+      return reply(chatId, `Uso: /nuevo  o  /nuevo <nombre> <cantidad>  (ej. /nuevo Elías 4)`);
+    }
+    f.data.name = name;
+    f.data.qty = qty;
+    f.step = 'phone';
+  }
+  flows.set(String(chatId), f);
+  return askStep(chatId, f);
+}
+
+/**
+ * Text answer to a typed step (nombre, cantidad, teléfono). Cada campo se
+ * valida por separado; si no sirve se vuelve a preguntar, no se interpreta.
+ * @param {string|number} chatId
+ * @param {string} text
+ */
+function flowText(chatId, text) {
+  const f = getFlow(chatId);
+  if (!f) {
+    return reply(chatId, 'Para registrar un pedido usa /nuevo. Para ver los comandos, /ayuda.');
+  }
+  const value = text.trim();
+  if (f.step === 'name') {
+    if (!value || value.length > MAX_NAME) return reply(chatId, `Nombre inválido (1 a ${MAX_NAME} caracteres). ${STEPS.name}`, flowKeyboard(f));
+    f.data.name = value;
+    f.step = 'qty';
+  } else if (f.step === 'qty') {
+    const qty = /^\d+$/.test(value) ? Number(value) : NaN;
+    if (!Number.isInteger(qty) || qty < 1 || qty > MAX_HALLACAS) {
+      return reply(chatId, `Cantidad inválida (entero de 1 a ${MAX_HALLACAS}). ${STEPS.qty}`, flowKeyboard(f));
+    }
+    f.data.qty = qty;
+    f.step = 'phone';
+  } else if (f.step === 'phone') {
+    const phone = normalizePhone(value);
+    if (!phone) return reply(chatId, `Teléfono inválido. ${STEPS.phone}`, flowKeyboard(f));
+    f.data.phone = phone;
+    f.step = 'pay';
+  } else {
+    return reply(chatId, 'Elige con los botones del último mensaje, o /cancelar.');
+  }
+  return askStep(chatId, f);
+}
+
+/**
+ * Button of the guided flow (n:<token>:<choice>).
+ * @param {object} cq - callback_query.
+ * @param {string} token
+ * @param {string} choice
+ */
+async function handleFlowCallback(cq, token, choice) {
+  const chatId = cq.message.chat.id;
+  const original = cq.message.text || '';
+  const f = getFlow(chatId);
+  // Botón de un flujo anterior o ya terminado: no hace nada.
+  if (!f || f.token !== token) {
+    await callApi('answerCallbackQuery', { callback_query_id: cq.id, text: 'Este paso ya no está activo' });
+    return editMessage(cq.message, original);
+  }
+  if (choice === 'no') {
+    flows.delete(String(chatId));
     await callApi('answerCallbackQuery', { callback_query_id: cq.id, text: 'Cancelado' });
-    return editMessage(cq.message, `${original}\n\n✖️ Cancelado: no se registró nada.`);
+    return editMessage(cq.message, `${original}\n\n✖️ Pedido cancelado: no se registró nada.`);
+  }
+  const valid = {
+    phone: ['nophone'], pay: ['pp', 'pu'], encargo: ['e1', 'e0'], confirm: ['ok'],
+  }[f.step] || [];
+  if (!valid.includes(choice)) {
+    await callApi('answerCallbackQuery', { callback_query_id: cq.id, text: 'Este paso ya no está activo' });
+    return editMessage(cq.message, original);
   }
 
-  const results = draft.items.map(applyItem);
-  await callApi('answerCallbackQuery', { callback_query_id: cq.id, text: 'Aplicado' });
-  await editMessage(cq.message, `${original}\n\nResultado:\n${results.map((r) => r.line).join('\n')}`);
-  // Una pregunta por línea sin stock, con su propio borrador forzado.
-  for (const r of results.filter((x) => x.forceItem)) {
-    const t = saveDraft(chatId, [r.forceItem]);
-    await reply(chatId, `«${r.forceItem.label}»\nEsto deja el stock en ${r.quedaria}. ¿Registrar igual?`, {
-      inline_keyboard: [[
-        { text: '⚠️ Registrar igual', callback_data: `d:${t}:ok` },
-        { text: '✖️ No', callback_data: `d:${t}:no` },
-      ]],
+  if (choice === 'ok') {
+    // Se saca el flujo ANTES de escribir: un doble toque no registra dos veces.
+    flows.delete(String(chatId));
+    const { data } = f;
+    const r = registerSale(chatId, {
+      customerName: data.name,
+      quantityHallacas: data.qty,
+      status: data.pay,
+      ...(data.phone ? { customerPhone: data.phone } : {}),
+      ...(data.encargo ? { encargo: true } : {}),
     });
+    await callApi('answerCallbackQuery', { callback_query_id: cq.id, text: 'Listo' });
+    return editMessage(cq.message, `${original}\n\n${r.text}`, r.markup);
   }
-  return undefined;
+
+  let chosen;
+  if (choice === 'nophone') { f.data.phone = null; f.step = 'pay'; chosen = 'Sin teléfono'; }
+  if (choice === 'pp' || choice === 'pu') {
+    f.data.pay = choice === 'pp' ? 'pagado' : 'pendiente_pago';
+    f.step = 'encargo';
+    chosen = PAY_LABEL[f.data.pay];
+  }
+  if (choice === 'e1' || choice === 'e0') { f.data.encargo = choice === 'e1'; f.step = 'confirm'; chosen = f.data.encargo ? 'Encargo' : 'No es encargo'; }
+  await callApi('answerCallbackQuery', { callback_query_id: cq.id, text: chosen });
+  await editMessage(cq.message, `${original}\n→ ${chosen}`);
+  return askStep(chatId, f);
 }
 
 /* ============================== Listados ============================== */
 
 /**
- * /pedidos: active orders in the Notes format, grouped by review state.
+ * /pedidos: active orders, one readable line each, with per-order buttons.
  * Activo = vivo y no cerrado (cerrado = entregado y pagado o cortesía).
- * @returns {string}
+ * @returns {{text: string, markup?: object}}
  */
 function listActive() {
   const rows = db.prepare(`
@@ -472,18 +580,27 @@ function listActive() {
       AND NOT (delivered_at IS NOT NULL AND status IN ('pagado', 'cortesia'))
     ORDER BY id
   `).all();
-  if (!rows.length) return 'No hay pedidos activos.';
+  if (!rows.length) return { text: 'No hay pedidos activos.' };
   const porConfirmar = rows.filter((o) => reviewState(o) === 'por_confirmar');
   const confirmados = rows.filter((o) => reviewState(o) === 'confirmado');
   const out = [];
-  // Los títulos terminan en ":" para que, si el dueño reenvía el bloque, el
-  // parser los tome como encabezados y no como líneas inválidas.
-  if (porConfirmar.length) out.push('Por confirmar:', ...porConfirmar.map(formatOrderLine));
+  if (porConfirmar.length) out.push('Por confirmar:', ...porConfirmar.map(formatOrder));
   if (confirmados.length) {
     if (out.length) out.push('');
-    out.push('Confirmados:', ...confirmados.map(formatOrderLine));
+    out.push('Confirmados:', ...confirmados.map(formatOrder));
   }
-  return out.join('\n');
+  // Botones por pedido con sufijo ":l": tras la acción se redibuja la lista.
+  const keyboard = [];
+  for (const o of [...porConfirmar, ...confirmados]) {
+    const b = buttonsFor(o);
+    if (!b) continue;
+    if (keyboard.length >= MAX_LIST_ROWS) { out.push('', `(Botones solo para los primeros ${MAX_LIST_ROWS}; usa /pagado <id>, etc.)`); break; }
+    keyboard.push(b.inline_keyboard.flat().map((btn) => ({
+      text: `${btn.text.split(' ')[0]} #${o.id}`,
+      callback_data: `${btn.callback_data}:l`,
+    })));
+  }
+  return { text: out.join('\n'), markup: keyboard.length ? { inline_keyboard: keyboard } : undefined };
 }
 
 /**
@@ -502,11 +619,11 @@ function listPending() {
   if (!rows.length) return 'No hay pedidos por confirmar.';
   const out = [];
   if (porConfirmar.length) {
-    out.push('Por confirmar:', ...porConfirmar.map((o) => `${formatOrderLine(o)} Vence ${fmtChile(o.expires_at)}.`));
+    out.push('Por confirmar:', ...porConfirmar.map((o) => `${formatOrder(o)} — vence ${fmtChile(o.expires_at)}`));
   }
   if (vencidos.length) {
     if (out.length) out.push('');
-    out.push('Vencidos (últimos 7 días, no reservan stock):', ...vencidos.map(formatOrderLine));
+    out.push('Vencidos (últimos 7 días, no reservan stock):', ...vencidos.map(formatOrder));
   }
   out.push('', 'Confirma con /confirmar <id>.');
   return out.join('\n');
@@ -526,7 +643,9 @@ function stockText() {
 
 const HELP = [
   'Comandos:',
-  '/pedidos — pedidos activos con su #ID',
+  '/nuevo — registrar un pedido paso a paso',
+  '/nuevo <nombre> <cantidad> — atajo (ej. /nuevo Elías 4)',
+  '/pedidos — pedidos activos con su #ID y botones',
   '/pendientes — pedidos web por confirmar y vencidos',
   '/stock — stock disponible',
   '/confirmar <id> — confirma un pedido web',
@@ -534,22 +653,16 @@ const HELP = [
   '/porpagar <id> — vuelve a pendiente de pago',
   '/entregado <id> — marca entregado',
   '/rechazar <id> — cancela un pedido web sin confirmar',
+  '/cancelar — descarta el /nuevo en curso',
   '',
-  'Registrar pedidos (una o varias líneas):',
-  'Elías: 4. Pagado. Por entregar.',
-  'Bryan Toloza: 2. Pendiente de pago. 912345678',
-  'Ana: 30. Encargo.',
-  '',
-  'Cambiar un pedido existente (con nombres repetidos, siempre por #ID):',
-  '#12: Pagado. Entregado.',
-  '',
-  'Siempre te muestro un resumen con Confirmar/Cancelar antes de aplicar.',
+  'Con nombres repetidos, opera siempre por #ID.',
 ].join('\n');
 
 const COMMAND_ACTIONS = { confirmar: 'c', pagado: 'p', porpagar: 'u', entregado: 'e', rechazar: 'x' };
 
 /**
- * Handles a slash command.
+ * Handles a slash command. Cualquier comando distinto de /nuevo descarta el
+ * flujo en curso, para que un texto posterior no se tome como respuesta vieja.
  * @param {string|number} chatId
  * @param {string} text
  */
@@ -557,19 +670,26 @@ async function handleCommand(chatId, text) {
   const [first, ...args] = text.trim().split(/\s+/);
   // "/pedidos@MiBot" en grupos: el sufijo del bot no es parte del comando.
   const cmd = first.slice(1).split('@')[0].toLowerCase();
-  if (cmd === 'pedidos') return reply(chatId, listActive());
-  if (cmd === 'pendientes') return reply(chatId, listPending());
-  if (cmd === 'stock') return reply(chatId, stockText());
-  if (cmd === 'ayuda' || cmd === 'help' || cmd === 'start') return reply(chatId, HELP);
+  const hadFlow = flows.delete(String(chatId));
+  if (cmd === 'nuevo') return startFlow(chatId, args);
+  if (cmd === 'cancelar') return reply(chatId, hadFlow ? '✖️ Pedido en curso descartado.' : 'No hay un pedido en curso.');
+  const prefix = hadFlow ? '(Se descartó el pedido en curso.)\n\n' : '';
+  if (cmd === 'pedidos') {
+    const l = listActive();
+    return reply(chatId, prefix + l.text, l.markup);
+  }
+  if (cmd === 'pendientes') return reply(chatId, prefix + listPending());
+  if (cmd === 'stock') return reply(chatId, prefix + stockText());
+  if (cmd === 'ayuda' || cmd === 'help' || cmd === 'start') return reply(chatId, prefix + HELP);
   const action = COMMAND_ACTIONS[cmd];
   if (action) {
     const id = /^#?\d+$/.test(args[0] || '') ? Number(args[0].replace('#', '')) : null;
-    if (!id || !Number.isSafeInteger(id)) return reply(chatId, `Uso: /${cmd} <id>  (ej. /${cmd} 12)`);
-    if (!getOrderRow(id)) return reply(chatId, `⚠️ El pedido #${id} no existe.`);
+    if (!id || !Number.isSafeInteger(id)) return reply(chatId, `${prefix}Uso: /${cmd} <id>  (ej. /${cmd} 12)`);
+    if (!getOrderRow(id)) return reply(chatId, `${prefix}⚠️ El pedido #${id} no existe.`);
     const r = runAction(action, id);
-    return reply(chatId, r.text, r.markup);
+    return reply(chatId, prefix + r.text, r.markup);
   }
-  return reply(chatId, `No conozco /${cmd}.\n\n${HELP}`);
+  return reply(chatId, `${prefix}No conozco /${cmd}.\n\n${HELP}`);
 }
 
 /**
@@ -578,10 +698,12 @@ async function handleCommand(chatId, text) {
  */
 async function handleCallback(cq) {
   const data = String(cq.data || '');
+  const flow = data.match(/^n:([0-9a-f]{12}):(nophone|pp|pu|e1|e0|ok|no)$/);
+  if (flow) return handleFlowCallback(cq, flow[1], flow[2]);
   const draft = data.match(/^d:([0-9a-f]{12}):(ok|no)$/);
   if (draft) return handleDraftCallback(cq, draft[1], draft[2]);
 
-  const m = data.match(/^([cxpue]):(\d{1,12})(:f)?$/);
+  const m = data.match(/^([cxpue]):(\d{1,12})(:f)?(:l)?$/);
   if (!m) {
     return callApi('answerCallbackQuery', { callback_query_id: cq.id, text: 'Acción no reconocida' });
   }
@@ -592,6 +714,13 @@ async function handleCallback(cq) {
   }
   const r = runAction(m[1], id, Boolean(m[3]));
   await callApi('answerCallbackQuery', { callback_query_id: cq.id, text: r.toast });
+  // Desde /pedidos: si la acción se aplicó (o no hacía falta), se redibuja la
+  // lista con el estado actual; si pide algo más (force, confirmar), se
+  // muestra esa pregunta en su lugar.
+  if (m[4] && (r.ok || r.toast === 'Sin cambios')) {
+    const l = listActive();
+    return editMessage(cq.message, `${r.text}\n\n${l.text}`, l.markup);
+  }
   return editMessage(cq.message, `${cq.message.text || ''}\n\n→ ${r.text}`, r.markup);
 }
 
@@ -624,7 +753,7 @@ async function handleUpdate(update) {
     const msg = update.message;
     if (!msg || typeof msg.text !== 'string' || !isAllowed(msg.chat?.id)) return 'ignored';
     if (msg.text.trim().startsWith('/')) await handleCommand(msg.chat.id, msg.text);
-    else await handleNotes(msg.chat.id, msg.text);
+    else await flowText(msg.chat.id, msg.text);
     return 'handled';
   } catch (err) {
     console.error('[telegram] update falló:', err);
@@ -632,10 +761,11 @@ async function handleUpdate(update) {
   }
 }
 
-/** Test helper: clears in-memory drafts and seen updates. */
+/** Test helper: clears in-memory state (flows, drafts, seen updates). */
 function _reset() {
   drafts.clear();
+  flows.clear();
   seenUpdates.clear();
 }
 
-module.exports = { handleUpdate, isAllowed, allowedChats, listActive, _reset, _drafts: drafts };
+module.exports = { handleUpdate, isAllowed, allowedChats, listActive, _reset, _drafts: drafts, _flows: flows };

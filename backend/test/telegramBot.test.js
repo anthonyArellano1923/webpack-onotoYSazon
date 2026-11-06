@@ -246,108 +246,153 @@ test('B5: comandos /confirmar, /pagado, /porpagar, /entregado con <id>', async (
   assert.match(texts[5], /#9999 no existe/);
 });
 
-/* ---------------- Formato de Notas ---------------- */
+/* ---------------- Registro guiado /nuevo ---------------- */
 
-test('N1: el bloque de Notas → resumen con Confirmar/Cancelar; nada se escribe hasta confirmar', async () => {
+/**
+ * Data of the n:<token>:<choice> button with the given choice in the last message that has it.
+ * @param {string} choice
+ * @returns {string}
+ */
+function flowButton(choice) {
+  const all = [...sent('sendMessage'), ...sent('editMessageText')].flatMap(buttons);
+  const found = all.filter((d) => d.endsWith(`:${choice}`) && d.startsWith('n:'));
+  assert.ok(found.length, `no hay botón ${choice}`);
+  return found[found.length - 1];
+}
+
+/** @returns {string} Text of the last sendMessage. */
+const lastText = () => sent('sendMessage').at(-1).body.text;
+
+/** @returns {number} Number of orders in the DB. */
+const countOrders = () => h.db.prepare('SELECT COUNT(*) AS n FROM orders').get().n;
+
+test('N1: /nuevo paso a paso → resumen → Confirmar registra una venta admin confirmada', async () => {
   h.addStock(20);
-  await postWebhook(msg(`Tanda prueba:
-  Elías: 4. Por entregar. Pagado.
-  Bryan Toloza: 2. Pendiente pago. Por entregar.
-  Leonel Landaeta: 3. Pendiente de pago.
-  Elvis Pacheco: 1. Pagada. Entregada.
-  Fulano 3 pagado`));
-  const summary = sent('sendMessage')[0];
-  assert.match(summary.body.text, /Voy a registrar 4 cambios/);
-  assert.match(summary.body.text, /línea 6: «Fulano 3 pagado»/);
-  assert.match(summary.body.text, /«Tanda prueba:» \(encabezado\)/);
-  const [ok, no] = buttons(summary);
-  assert.match(ok, /^d:[0-9a-f]{12}:ok$/);
-  assert.match(no, /^d:[0-9a-f]{12}:no$/);
-  assert.equal(h.db.prepare('SELECT COUNT(*) AS n FROM orders').get().n, 0);
+  await postWebhook(msg('/nuevo'));
+  assert.match(lastText(), /Nombre del cliente/);
+  await postWebhook(msg('Bryan Toloza'));
+  assert.match(lastText(), /Cuántas hallacas/);
+  await postWebhook(msg('2'));
+  assert.match(lastText(), /Teléfono/);
+  await postWebhook(msg('912345678'));
+  assert.match(lastText(), /Pagado o pendiente/);
+  await postWebhook(press(flowButton('pu')));
+  assert.match(lastText(), /encargo/);
+  await postWebhook(press(flowButton('e0')));
+  assert.match(lastText(), /Resumen del pedido:\nCliente: Bryan Toloza\nHallacas: 2\nTeléfono: \+56912345678\nPago: Pendiente de pago\nEncargo: no/);
+  assert.equal(countOrders(), 0);
 
-  await postWebhook(press(ok, OWNER, summary.body.text));
-  const rows = h.db.prepare('SELECT * FROM orders ORDER BY id').all();
-  assert.deepEqual(rows.map((o) => [o.customer_name, o.quantity_hallacas, o.status, Boolean(o.delivered_at), o.source, o.customer_phone]), [
-    ['Elías', 4, 'pagado', false, 'admin', null],
-    ['Bryan Toloza', 2, 'pendiente_pago', false, 'admin', null],
-    ['Leonel Landaeta', 3, 'pendiente_pago', false, 'admin', null],
-    ['Elvis Pacheco', 1, 'pagado', true, 'admin', null],
-  ]);
-  for (const o of rows) assert.notEqual(o.confirmed_at, null);
-  assert.equal(h.getStock(), 10);
+  await postWebhook(press(flowButton('ok')));
+  const o = h.db.prepare('SELECT * FROM orders').get();
+  assert.equal(o.customer_name, 'Bryan Toloza');
+  assert.equal(o.quantity_hallacas, 2);
+  assert.equal(o.status, 'pendiente_pago');
+  assert.equal(o.customer_phone, '+56912345678');
+  assert.equal(o.source, 'admin');
+  assert.notEqual(o.confirmed_at, null);
+  assert.equal(o.stock_exempt, 0);
+  assert.equal(h.getStock(), 18);
+  // El resultado ofrece los botones que siguen teniendo sentido.
+  assert.deepEqual(buttons(sent('editMessageText').at(-1)), [`p:${o.id}`, `e:${o.id}`]);
 
-  // Doble toque en Confirmar: el borrador ya se consumió, no duplica.
-  await postWebhook(press(ok, OWNER, summary.body.text));
-  assert.equal(h.db.prepare('SELECT COUNT(*) AS n FROM orders').get().n, 4);
-  assert.match(sent('editMessageText')[1].body.text, /expiró o ya se aplicó/);
+  // Doble toque en Confirmar: el flujo ya terminó, no duplica.
+  await postWebhook(press(flowButton('ok')));
+  assert.equal(countOrders(), 1);
 });
 
-test('N2: Cancelar descarta el borrador', async () => {
+test('N2: atajo /nuevo <nombre> <cantidad>, sin teléfono, pagado y encargo', async () => {
+  h.addStock(5);
+  await postWebhook(msg('/nuevo Elías Pérez 30'));
+  assert.match(lastText(), /Teléfono/);
+  await postWebhook(press(flowButton('nophone')));
+  await postWebhook(press(flowButton('pp')));
+  await postWebhook(press(flowButton('e1')));
+  assert.match(lastText(), /Teléfono: \(sin teléfono\)[\s\S]*Encargo: sí/);
+  await postWebhook(press(flowButton('ok')));
+  const o = h.db.prepare('SELECT * FROM orders').get();
+  assert.equal(o.customer_name, 'Elías Pérez');
+  assert.equal(o.customer_phone, null);
+  assert.equal(o.status, 'pagado');
+  assert.equal(o.stock_exempt, 1);
+  assert.equal(h.getStock(), 5);
+
+  await postWebhook(msg('/nuevo Elías'));
+  assert.match(lastText(), /Uso: \/nuevo/);
+});
+
+test('N3: entradas inválidas se vuelven a preguntar; el texto libre fuera de /nuevo no se interpreta', async () => {
   h.addStock(20);
   await postWebhook(msg('Elías: 4. Pagado.'));
-  const [, no] = buttons(sent('sendMessage')[0]);
-  await postWebhook(press(no));
-  assert.equal(h.db.prepare('SELECT COUNT(*) AS n FROM orders').get().n, 0);
-  assert.match(sent('editMessageText')[0].body.text, /Cancelado/);
+  assert.match(lastText(), /usa \/nuevo/);
+  assert.equal(bot._flows.size, 0);
+  assert.equal(countOrders(), 0);
+
+  await postWebhook(msg('/nuevo'));
+  await postWebhook(msg('Elías'));
+  for (const bad of ['cuatro', '0', '4.5', '20000', '-3']) {
+    await postWebhook(msg(bad));
+    assert.match(lastText(), /Cantidad inválida/, bad);
+  }
+  await postWebhook(msg('4'));
+  await postWebhook(msg('12345'));
+  assert.match(lastText(), /Teléfono inválido/);
+  // En un paso de botones, escribir no avanza.
+  await postWebhook(press(flowButton('nophone')));
+  await postWebhook(msg('pagado'));
+  assert.match(lastText(), /Elige con los botones/);
+  assert.equal(countOrders(), 0);
 });
 
-test('N3: STOCK_INSUFICIENTE en una venta nueva → «Esto deja el stock en X» y force', async () => {
+test('N4: Cancelar, /cancelar y botones de un flujo viejo no registran nada', async () => {
+  h.addStock(20);
+  await postWebhook(msg('/nuevo Ana 3'));
+  const viejo = flowButton('nophone');
+  await postWebhook(press(flowButton('no')));
+  assert.match(sent('editMessageText').at(-1).body.text, /no se registró nada/);
+
+  await postWebhook(msg('/nuevo Ana 3'));
+  await postWebhook(press(viejo));
+  assert.match(sent('answerCallbackQuery').at(-1).body.text, /ya no está activo/);
+  await postWebhook(msg('/cancelar'));
+  assert.match(lastText(), /descartado/);
+  await postWebhook(msg('Ana'));
+  assert.match(lastText(), /usa \/nuevo/);
+  assert.equal(countOrders(), 0);
+});
+
+test('N5: STOCK_INSUFICIENTE en /nuevo → «Esto deja el stock en X» y Registrar igual con force', async () => {
   h.addStock(3);
-  await postWebhook(msg('Elías: 2. Pagado.\nAna: 5. Pendiente de pago. 912345678'));
-  const [ok] = buttons(sent('sendMessage')[0]);
-  await postWebhook(press(ok));
-  assert.equal(h.db.prepare('SELECT COUNT(*) AS n FROM orders').get().n, 1);
-  const ask = sent('sendMessage')[1];
-  assert.match(ask.body.text, /Esto deja el stock en -4\. ¿Registrar igual\?/);
-
+  await postWebhook(msg('/nuevo Ana 5'));
+  await postWebhook(press(flowButton('nophone')));
+  await postWebhook(press(flowButton('pu')));
+  await postWebhook(press(flowButton('e0')));
+  await postWebhook(press(flowButton('ok')));
+  assert.equal(countOrders(), 0);
+  const ask = sent('editMessageText').at(-1);
+  assert.match(ask.body.text, /Esto deja el stock en -2\. ¿Registrar igual\?/);
   const [force] = buttons(ask);
+  assert.match(force, /^d:[0-9a-f]{12}:ok$/);
+
   await postWebhook(press(force));
-  const ana = h.db.prepare("SELECT * FROM orders WHERE customer_name = 'Ana'").get();
-  assert.equal(ana.quantity_hallacas, 5);
-  assert.equal(ana.customer_phone, '+56912345678');
-  assert.equal(h.getStock(), -4);
+  assert.equal(countOrders(), 1);
+  assert.equal(h.getStock(), -2);
+  await postWebhook(press(force));
+  assert.equal(countOrders(), 1);
 });
 
-test('N4: encargo no descuenta stock; nombre repetido avisa con #ID', async () => {
-  h.addStock(5);
-  h.manualSale({ customerName: 'Elías', quantityHallacas: 1 });
-  await postWebhook(msg('Elías: 30. Encargo.'));
-  const summary = sent('sendMessage')[0].body.text;
-  assert.match(summary, /ojo: ya existe #\d+ con 1/);
-  await postWebhook(press(buttons(sent('sendMessage')[0])[0]));
-  const enc = h.db.prepare('SELECT * FROM orders WHERE quantity_hallacas = 30').get();
-  assert.equal(enc.stock_exempt, 1);
-  assert.equal(h.getStock(), 4);
-});
-
-test('N5: línea #ID cambia pago y entrega; nombre o cantidad distintos se señalan', async () => {
+test('N6: nombre repetido → el resumen avisa con los #ID', async () => {
   h.addStock(20);
-  const a = h.manualSale({ customerName: 'Elías', quantityHallacas: 4 }).body.order.id;
-  const b = h.manualSale({ customerName: 'Elías', quantityHallacas: 2 }).body.order.id;
-  await postWebhook(msg(`#${a} Elías: 4. Pagado. Entregado.\n#${b} Bryan: 2. Pagado.\n#${b}: 3. Pagado.`));
-  const summary = sent('sendMessage')[0].body.text;
-  assert.match(summary, /Voy a registrar 1 cambio/);
-  assert.match(summary, /es de «Elías», no de «Bryan»/);
-  assert.match(summary, /tiene 2 hallacas, no 3/);
-  await postWebhook(press(buttons(sent('sendMessage')[0])[0]));
-  assert.equal(h.getOrder(a).status, 'pagado');
-  assert.notEqual(h.getOrder(a).delivered_at, null);
-  assert.equal(h.getOrder(b).status, 'pendiente_pago');
-});
-
-test('N6: un #ID cancelado entre el resumen y el botón no se reactiva', async () => {
-  h.addStock(20);
-  const id = h.manualSale({ customerName: 'Elías', quantityHallacas: 4 }).body.order.id;
-  await postWebhook(msg(`#${id}: Pagado.`));
-  h.patch(id, { status: 'cancelado' });
-  await postWebhook(press(buttons(sent('sendMessage')[0])[0]));
-  assert.equal(h.getOrder(id).status, 'cancelado');
-  assert.match(sent('editMessageText')[0].body.text, /se canceló mientras tanto/);
+  const id = h.manualSale({ customerName: 'Elías', quantityHallacas: 1 }).body.order.id;
+  await postWebhook(msg('/nuevo elias 2'));
+  await postWebhook(press(flowButton('nophone')));
+  await postWebhook(press(flowButton('pu')));
+  await postWebhook(press(flowButton('e0')));
+  assert.match(lastText(), new RegExp(`Ojo: ya existe #${id} con 1`));
 });
 
 /* ---------------- Listados ---------------- */
 
-test('L1: /pedidos lista activos con #ID y su salida se puede reenviar tal cual', async () => {
+test('L1: /pedidos lista activos con #ID y botones por pedido que redibujan la lista', async () => {
   h.addStock(20);
   const web = await webOrder({ hallacas: 2, name: 'Cliente Web' });
   const a = h.manualSale({ customerName: 'Elías', quantityHallacas: 4, status: 'pagado' }).body.order.id;
@@ -355,16 +400,27 @@ test('L1: /pedidos lista activos con #ID y su salida se puede reenviar tal cual'
   h.patch(cerrado, { delivered: true });
 
   await postWebhook(msg('/pedidos'));
-  const text = sent('sendMessage')[0].body.text;
-  assert.match(text, new RegExp(`Por confirmar:\\n#${web} Cliente Web: 2\\. Pendiente de pago\\. Por entregar\\.`));
-  assert.match(text, new RegExp(`Confirmados:\\n#${a} Elías: 4\\. Pagado\\. Por entregar\\.`));
-  assert.doesNotMatch(text, /Cerrado/);
+  const list = sent('sendMessage')[0];
+  assert.match(list.body.text, new RegExp(`Por confirmar:\\n#${web} Cliente Web — 2 hallacas — Pendiente de pago — por entregar`));
+  assert.match(list.body.text, new RegExp(`Confirmados:\\n#${a} Elías — 4 hallacas — Pagado — por entregar`));
+  assert.doesNotMatch(list.body.text, /Cerrado/);
+  assert.deepEqual(list.body.reply_markup.inline_keyboard, [
+    [
+      { text: `✅ #${web}`, callback_data: `c:${web}:l` },
+      { text: `✖️ #${web}`, callback_data: `x:${web}:l` },
+      { text: `💰 #${web}`, callback_data: `p:${web}:l` },
+      { text: `📦 #${web}`, callback_data: `e:${web}:l` },
+    ],
+    [{ text: `📦 #${a}`, callback_data: `e:${a}:l` }],
+  ]);
 
-  // Reenviar el listado sin cambios no propone nada ni marca errores.
-  await postWebhook(msg(text));
-  const back = sent('sendMessage')[1].body.text;
-  assert.doesNotMatch(back, /No entendí/);
-  assert.match(back, /sin cambios/);
+  await postWebhook(press(`e:${a}:l`, OWNER, list.body.text));
+  assert.notEqual(h.getOrder(a).delivered_at, null);
+  const redraw = sent('editMessageText').at(-1);
+  assert.match(redraw.body.text, new RegExp(`#${a} Elías: entregado`));
+  // Pagado y entregado → cerrado: sale de la lista y de los botones.
+  assert.doesNotMatch(redraw.body.text, /Confirmados:/);
+  assert.equal(buttons(redraw).some((d) => d.includes(`:${a}:`)), false);
 });
 
 test('L2: /pendientes y /stock', async () => {
