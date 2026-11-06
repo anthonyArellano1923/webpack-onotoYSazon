@@ -8,7 +8,8 @@
  *
  * Entrada SOLO por comandos y botones (ADR-5, D7): no se interpreta texto
  * libre. El único texto que se lee es la respuesta a un paso del flujo guiado
- * /nuevo (nombre, cantidad, teléfono), validado campo por campo.
+ * /nuevo (nombre, cantidad, teléfono) o /tanda (cantidad, costo, fecha,
+ * notas), validado campo por campo.
  *
  * Seguridad:
  * - Chat fuera de la lista blanca → se ignora en silencio (ni siquiera se
@@ -22,6 +23,8 @@ const crypto = require('crypto');
 const { db } = require('../database/db');
 const { getStockBreakdown } = require('../controllers/packs.controller');
 const { createSale, updateSale, MAX_HALLACAS } = require('./orders.service');
+const { createBatch, MAX_CANTIDAD } = require('./batches.service');
+const { esFechaValida } = require('../utils/fecha');
 const { LIVE_ORDER_SQL, reviewState } = require('../utils/orderState');
 const { normalizePhone } = require('../utils/phone');
 const { callApi, fmtChile } = require('./notify');
@@ -486,9 +489,10 @@ function startFlow(chatId, args) {
 function flowText(chatId, text) {
   const f = getFlow(chatId);
   if (!f) {
-    return reply(chatId, 'Para registrar un pedido usa /nuevo. Para ver los comandos, /ayuda.');
+    return reply(chatId, 'Para registrar un pedido usa /nuevo; para una tanda, /tanda. Para ver los comandos, /ayuda.');
   }
   const value = text.trim();
+  if (f.kind === 'tanda') return tandaText(chatId, f, value);
   if (f.step === 'name') {
     if (!value || value.length > MAX_NAME) return reply(chatId, `Nombre inválido (1 a ${MAX_NAME} caracteres). ${STEPS.name}`, flowKeyboard(f));
     f.data.name = value;
@@ -521,8 +525,8 @@ async function handleFlowCallback(cq, token, choice) {
   const chatId = cq.message.chat.id;
   const original = cq.message.text || '';
   const f = getFlow(chatId);
-  // Botón de un flujo anterior o ya terminado: no hace nada.
-  if (!f || f.token !== token) {
+  // Botón de un flujo anterior, ya terminado o de una /tanda: no hace nada.
+  if (!f || f.kind === 'tanda' || f.token !== token) {
     await callApi('answerCallbackQuery', { callback_query_id: cq.id, text: 'Este paso ya no está activo' });
     return editMessage(cq.message, original);
   }
@@ -565,6 +569,192 @@ async function handleFlowCallback(cq, token, choice) {
   await callApi('answerCallbackQuery', { callback_query_id: cq.id, text: chosen });
   await editMessage(cq.message, `${original}\n→ ${chosen}`);
   return askStep(chatId, f);
+}
+
+/* ============================== Flujo guiado /tanda ============================== */
+
+// Comparte el mapa `flows` con /nuevo (un flujo por chat, kind: 'tanda'); los
+// botones usan el prefijo t: para no mezclarse con los de un pedido.
+const TANDA_STEPS = {
+  qty: '(1/4) ¿Cuántas hallacas produjo la tanda? (número entero)',
+  cost: '(2/4) Costo total de la tanda en pesos (ej. 250000) o toca «Sin costo».',
+  date: '(3/4) ¿Fecha de producción? Toca «Hoy» o escríbela (DD-MM-AAAA).',
+  notes: '(4/4) Notas de la tanda o toca «Sin notas».',
+};
+const MAX_NOTES = 500;
+
+/**
+ * Parses a production date typed in the chat: DD-MM-AAAA, DD/MM/AAAA or AAAA-MM-DD.
+ * @param {string} value
+ * @returns {string|null} YYYY-MM-DD, or null when it is not a real date.
+ */
+function parseFecha(value) {
+  let iso = null;
+  const dmy = value.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+  if (dmy) iso = `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+  else if (/^\d{4}-\d{2}-\d{2}$/.test(value)) iso = value;
+  return iso && esFechaValida(iso) ? iso : null;
+}
+
+/**
+ * Formats CLP with thousands separators (250000 → $250.000).
+ * @param {number} n
+ * @returns {string}
+ */
+const clp = (n) => `$${Number(n).toLocaleString('es-CL')}`;
+
+/**
+ * Inline keyboard of a /tanda step.
+ * @param {object} f - Flow.
+ * @returns {object}
+ */
+function tandaKeyboard(f) {
+  const cb = (c) => `t:${f.token}:${c}`;
+  const cancel = { text: '✖️ Cancelar', callback_data: cb('no') };
+  if (f.step === 'cost') return { inline_keyboard: [[{ text: 'Sin costo', callback_data: cb('nocost') }, cancel]] };
+  if (f.step === 'date') return { inline_keyboard: [[{ text: '📅 Hoy', callback_data: cb('hoy') }, cancel]] };
+  if (f.step === 'notes') return { inline_keyboard: [[{ text: 'Sin notas', callback_data: cb('nonotes') }, cancel]] };
+  if (f.step === 'confirm') return { inline_keyboard: [[{ text: '✅ Registrar tanda', callback_data: cb('ok') }, cancel]] };
+  return { inline_keyboard: [[cancel]] };
+}
+
+/**
+ * Summary shown before registering a batch.
+ * @param {object} d - Flow data.
+ * @returns {string}
+ */
+function tandaSummary(d) {
+  return [
+    'Resumen de la tanda:',
+    `Hallacas: ${d.qty}`,
+    `Costo total: ${d.cost ? clp(d.cost) : '(sin costo)'}`,
+    `Fecha: ${d.date || 'hoy'}`,
+    `Notas: ${d.notes || '(sin notas)'}`,
+    '',
+    `Al registrarla, el stock sube en ${d.qty}.`,
+  ].join('\n');
+}
+
+/**
+ * Sends the prompt of the /tanda flow's current step.
+ * @param {string|number} chatId
+ * @param {object} f
+ */
+function askTandaStep(chatId, f) {
+  f.expiresAt = Date.now() + STATE_TTL_MS;
+  const text = f.step === 'confirm' ? tandaSummary(f.data) : TANDA_STEPS[f.step];
+  return reply(chatId, text, tandaKeyboard(f));
+}
+
+/**
+ * /tanda [cantidad]: starts the guided batch flow.
+ * @param {string|number} chatId
+ * @param {string[]} args
+ */
+function startTanda(chatId, args) {
+  const f = { kind: 'tanda', token: newToken(), step: 'qty', data: { qty: null, cost: null, date: null, notes: null } };
+  // Atajo /tanda <cantidad>.
+  if (args.length) {
+    const qty = args.length === 1 && /^\d+$/.test(args[0]) ? Number(args[0]) : NaN;
+    if (!Number.isInteger(qty) || qty < 1 || qty > MAX_CANTIDAD) {
+      return reply(chatId, `Uso: /tanda  o  /tanda <cantidad>  (ej. /tanda 120, máximo ${MAX_CANTIDAD})`);
+    }
+    f.data.qty = qty;
+    f.step = 'cost';
+  }
+  flows.set(String(chatId), f);
+  return askTandaStep(chatId, f);
+}
+
+/**
+ * Text answer to a typed /tanda step (cantidad, costo, fecha, notas).
+ * @param {string|number} chatId
+ * @param {object} f - Live flow.
+ * @param {string} value - Trimmed text.
+ */
+function tandaText(chatId, f, value) {
+  const again = (msgText) => reply(chatId, `${msgText} ${TANDA_STEPS[f.step]}`, tandaKeyboard(f));
+  if (f.step === 'qty') {
+    const qty = /^\d+$/.test(value) ? Number(value) : NaN;
+    if (!Number.isInteger(qty) || qty < 1 || qty > MAX_CANTIDAD) return again(`Cantidad inválida (entero de 1 a ${MAX_CANTIDAD}).`);
+    f.data.qty = qty;
+    f.step = 'cost';
+  } else if (f.step === 'cost') {
+    // Se aceptan separadores de miles y el signo $: "$250.000" → 250000.
+    const digits = value.replace(/^\$/, '').replace(/[.\s]/g, '');
+    const cost = /^\d+$/.test(digits) ? Number(digits) : NaN;
+    if (!Number.isSafeInteger(cost) || cost > 100000000) return again('Costo inválido (pesos enteros, hasta 100.000.000).');
+    f.data.cost = cost;
+    f.step = 'date';
+  } else if (f.step === 'date') {
+    const fecha = parseFecha(value);
+    if (!fecha) return again('Fecha inválida.');
+    f.data.date = fecha;
+    f.step = 'notes';
+  } else if (f.step === 'notes') {
+    if (!value || value.length > MAX_NOTES) return again(`Notas inválidas (1 a ${MAX_NOTES} caracteres).`);
+    f.data.notes = value;
+    f.step = 'confirm';
+  } else {
+    return reply(chatId, 'Elige con los botones del último mensaje, o /cancelar.');
+  }
+  return askTandaStep(chatId, f);
+}
+
+/**
+ * Registers the batch with the panel's rule and builds the reply.
+ * @param {object} d - Flow data.
+ * @returns {string}
+ */
+function registerTanda(d) {
+  try {
+    const { batchId, fecha } = createBatch({
+      quantity: d.qty, costTotalClp: d.cost, producedAt: d.date, notes: d.notes,
+    });
+    const b = getStockBreakdown();
+    return `✅ Tanda #${batchId} registrada: ${d.qty} hallacas (${fecha}).\nStock disponible: ${b.stock} hallacas.`;
+  } catch (err) {
+    if (err.statusCode) return `⚠️ No se registró: ${err.message}`;
+    console.error('[telegram] tanda falló:', err);
+    return '⚠️ Error interno; revisa el panel.';
+  }
+}
+
+/**
+ * Button of the /tanda flow (t:<token>:<choice>).
+ * @param {object} cq - callback_query.
+ * @param {string} token
+ * @param {string} choice
+ */
+async function handleTandaCallback(cq, token, choice) {
+  const chatId = cq.message.chat.id;
+  const original = cq.message.text || '';
+  const f = getFlow(chatId);
+  const valid = { cost: ['nocost'], date: ['hoy'], notes: ['nonotes'], confirm: ['ok'] }[f?.step] || [];
+  // Botón de un flujo anterior, de otro tipo o de un paso ya respondido: no hace nada.
+  if (!f || f.kind !== 'tanda' || f.token !== token || (choice !== 'no' && !valid.includes(choice))) {
+    await callApi('answerCallbackQuery', { callback_query_id: cq.id, text: 'Este paso ya no está activo' });
+    return editMessage(cq.message, original);
+  }
+  if (choice === 'no') {
+    flows.delete(String(chatId));
+    await callApi('answerCallbackQuery', { callback_query_id: cq.id, text: 'Cancelado' });
+    return editMessage(cq.message, `${original}\n\n✖️ Tanda cancelada: no se registró nada.`);
+  }
+  if (choice === 'ok') {
+    // Se saca el flujo ANTES de escribir: un doble toque no registra dos veces.
+    flows.delete(String(chatId));
+    const text = registerTanda(f.data);
+    await callApi('answerCallbackQuery', { callback_query_id: cq.id, text: 'Listo' });
+    return editMessage(cq.message, `${original}\n\n${text}`);
+  }
+  let chosen;
+  if (choice === 'nocost') { f.data.cost = null; f.step = 'date'; chosen = 'Sin costo'; }
+  if (choice === 'hoy') { f.data.date = null; f.step = 'notes'; chosen = 'Hoy'; }
+  if (choice === 'nonotes') { f.data.notes = null; f.step = 'confirm'; chosen = 'Sin notas'; }
+  await callApi('answerCallbackQuery', { callback_query_id: cq.id, text: chosen });
+  await editMessage(cq.message, `${original}\n→ ${chosen}`);
+  return askTandaStep(chatId, f);
 }
 
 /* ============================== Listados ============================== */
@@ -646,6 +836,8 @@ const HELP = [
   'Comandos:',
   '/nuevo — registrar un pedido paso a paso',
   '/nuevo <nombre> <cantidad> — atajo (ej. /nuevo Elías 4)',
+  '/tanda — registrar una tanda nueva paso a paso (suma al stock)',
+  '/tanda <cantidad> — atajo (ej. /tanda 120)',
   '/pedidos — pedidos activos con su #ID y botones',
   '/pendientes — pedidos web por confirmar y vencidos',
   '/stock — stock disponible',
@@ -654,7 +846,7 @@ const HELP = [
   '/porpagar <id> — vuelve a pendiente de pago',
   '/entregado <id> — marca entregado',
   '/rechazar <id> — cancela un pedido web sin confirmar',
-  '/cancelar — descarta el /nuevo en curso',
+  '/cancelar — descarta el /nuevo o /tanda en curso',
   '',
   'Con nombres repetidos, opera siempre por #ID.',
 ].join('\n');
@@ -671,10 +863,15 @@ async function handleCommand(chatId, text) {
   const [first, ...args] = text.trim().split(/\s+/);
   // "/pedidos@MiBot" en grupos: el sufijo del bot no es parte del comando.
   const cmd = first.slice(1).split('@')[0].toLowerCase();
-  const hadFlow = flows.delete(String(chatId));
+  const prev = getFlow(chatId);
+  const hadFlow = flows.delete(String(chatId)) && Boolean(prev);
+  const what = prev?.kind === 'tanda' ? 'Tanda en curso descartada' : 'Pedido en curso descartado';
   if (cmd === 'nuevo') return startFlow(chatId, args);
-  if (cmd === 'cancelar') return reply(chatId, hadFlow ? '✖️ Pedido en curso descartado.' : 'No hay un pedido en curso.');
-  const prefix = hadFlow ? '(Se descartó el pedido en curso.)\n\n' : '';
+  if (cmd === 'tanda') return startTanda(chatId, args);
+  if (cmd === 'cancelar') {
+    return reply(chatId, hadFlow ? `✖️ ${what}.` : 'No hay un pedido ni una tanda en curso.');
+  }
+  const prefix = hadFlow ? `(Se descartó: ${what.toLowerCase()}.)\n\n` : '';
   if (cmd === 'pedidos') {
     const l = listActive();
     return reply(chatId, prefix + l.text, l.markup);
@@ -701,6 +898,8 @@ async function handleCallback(cq) {
   const data = String(cq.data || '');
   const flow = data.match(/^n:([0-9a-f]{12}):(nophone|pp|pu|e1|e0|ok|no)$/);
   if (flow) return handleFlowCallback(cq, flow[1], flow[2]);
+  const tanda = data.match(/^t:([0-9a-f]{12}):(nocost|hoy|nonotes|ok|no)$/);
+  if (tanda) return handleTandaCallback(cq, tanda[1], tanda[2]);
   const draft = data.match(/^d:([0-9a-f]{12}):(ok|no)$/);
   if (draft) return handleDraftCallback(cq, draft[1], draft[2]);
 

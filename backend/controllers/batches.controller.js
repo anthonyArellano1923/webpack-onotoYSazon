@@ -2,10 +2,7 @@ const { db } = require('../database/db');
 const { esFechaValida, esFechaFutura, FECHA_FUTURA_MSG } = require('../utils/fecha');
 const { isMontoClp, MONTO_RANGE_MSG } = require('../utils/limits');
 
-// Tope anti-envenenamiento, alineado con MAX_DELTA de stock.controller y con
-// los topes R-5 del checkout: protege de dedos pegados en el teclado, no de
-// negocios legítimos.
-const MAX_CANTIDAD = 10000;
+const { createBatch: createBatchService, MAX_CANTIDAD } = require('../services/batches.service');
 
 /**
  * ADR-3 (plan 09): las tandas son el registro de COSTOS del negocio (inversión,
@@ -53,71 +50,20 @@ function getAllBatches(req, res) {
   });
 }
 
+/**
+ * POST /admin/batches: registers a batch and its stock income (services/batches.service.js).
+ */
 function createBatch(req, res) {
-  const { producedAt, quantity, costTotalClp, notes } = req.body;
-
-  if (!Number.isInteger(quantity) || quantity <= 0) {
-    return res.status(400).json({ error: 'La cantidad debe ser un entero mayor a 0.' });
-  }
-  // H-6 (auditoría 10): sin este tope, la tanda era la puerta de atrás al stock
-  // — `MAX_MOVIMIENTO` protegía los movimientos manuales pero una tanda de
-  // 999.999.999 entraba igual y creaba ese ingreso. Mismo criterio que R-5.
-  if (quantity > MAX_CANTIDAD) {
-    return res.status(400).json({ error: `Cantidad fuera de rango (máximo ${MAX_CANTIDAD} por tanda).` });
-  }
-  if (costTotalClp !== undefined && costTotalClp !== null && !isMontoClp(costTotalClp)) {
-    return res.status(400).json({ error: `El costo total debe ser un ${MONTO_RANGE_MSG}.` });
-  }
-  // PLAN-13: notes numérico/objeto reventaba en .trim() (500).
-  if (notes !== undefined && notes !== null && typeof notes !== 'string') {
-    return res.status(400).json({ error: 'Las notas deben ser texto.' });
-  }
-  // H-3: la fecha viaja al movimiento de stock y ordena el kardex.
-  const fechaPedida = String(producedAt ?? '').trim() || null;
-  if (fechaPedida !== null && !esFechaValida(fechaPedida)) {
-    return res.status(400).json({ error: 'Fecha inválida. Usa el formato AAAA-MM-DD.' });
-  }
-  // STOCK FASE 2: la tanda escribe un ingreso de stock con esta fecha.
-  if (fechaPedida !== null && esFechaFutura(fechaPedida)) {
-    return res.status(400).json({ error: FECHA_FUTURA_MSG });
-  }
-
-  // ADR-3: la tanda registra el costo Y empuja su cantidad al stock una vez, en
-  // la misma transacción (si algo falla no queda ni tanda ni movimiento). El
-  // movimiento nace independiente: `batch_ref` es una etiqueta histórica sin FK,
-  // así que borrar o editar la tanda después NO lo toca (invariante I-1).
-  const insertBatch = db.transaction(() => {
-    const fecha = fechaPedida
-      || db.prepare("SELECT date('now','localtime') AS d").get().d;
-
-    const result = db.prepare(`
-      INSERT INTO production_batches (produced_at, quantity, cost_total_clp, notes)
-      VALUES (?, ?, ?, ?)
-    `).run(
-      fecha,
-      quantity,
-      Number.isInteger(costTotalClp) ? costTotalClp : 0,
-      notes?.trim() || null
-    );
-
-    const batchId = result.lastInsertRowid;
-    const movement = db.prepare(`
-      INSERT INTO stock_movements (occurred_at, delta, reason, kind, batch_ref, created_by)
-      VALUES (?, ?, ?, 'tanda', ?, ?)
-    `).run(fecha, quantity, `Ingreso por tanda del ${fecha}`, batchId, req.user?.id ?? null);
-
-    return { batchId, movementId: movement.lastInsertRowid };
-  });
-
   try {
-    const { batchId, movementId } = insertBatch();
-    console.log(`[tandas] tanda #${batchId} (${quantity} u.) → movimiento de stock #${movementId} (+${quantity})`);
+    const { batchId, movementId } = createBatchService(req.body ?? {}, { userId: req.user?.id ?? null });
+    const { quantity } = req.body;
     return res.status(201).json({
       message: 'Tanda registrada',
       batch: { id: batchId },
       movement: { id: movementId, delta: quantity },
     });
   } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
     console.error('createBatch error:', err);
     return res.status(500).json({ error: 'Error al registrar la tanda.' });
   }

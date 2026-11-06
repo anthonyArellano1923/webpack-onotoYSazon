@@ -58,6 +58,7 @@ async function main() {
   await call(token, 'setMyCommands', {
     commands: [
       { command: 'nuevo', description: 'Registrar un pedido paso a paso' },
+      { command: 'tanda', description: 'Registrar una tanda nueva (suma al stock)' },
       { command: 'pedidos', description: 'Pedidos activos con su #ID' },
       { command: 'pendientes', description: 'Pedidos web por confirmar' },
       { command: 'stock', description: 'Stock disponible' },

@@ -462,3 +462,105 @@ test('A1: el aviso de pedido web nuevo trae Confirmar, Rechazar, Pagado y Entreg
   assert.equal(notice.body.parse_mode, undefined);
   assert.deepEqual(buttons(notice), [`c:${id}`, `x:${id}`, `p:${id}`, `e:${id}`]);
 });
+
+/* ---------------- Flujo guiado /tanda ---------------- */
+
+/**
+ * Latest /tanda button with the given choice.
+ * @param {string} choice
+ * @returns {string} callback_data
+ */
+function tandaButton(choice) {
+  const all = [...sent('sendMessage'), ...sent('editMessageText')].flatMap(buttons);
+  const found = all.filter((d) => d.startsWith('t:') && d.endsWith(`:${choice}`));
+  assert.ok(found.length, `no hay botón ${choice}`);
+  return found[found.length - 1];
+}
+
+/** @returns {Array<object>} Batches in the DB. */
+const batches = () => h.db.prepare('SELECT * FROM production_batches ORDER BY id').all();
+
+/** @returns {number} Sum of stock movements of kind 'tanda'. */
+const tandaStock = () => h.db.prepare("SELECT COALESCE(SUM(delta), 0) AS n FROM stock_movements WHERE kind = 'tanda'").get().n;
+
+test('T1: /tanda paso a paso → resumen → Registrar crea tanda e ingreso de stock', async () => {
+  await postWebhook(msg('/tanda'));
+  assert.match(lastText(), /\(1\/4\)/);
+  await postWebhook(msg('120'));
+  await postWebhook(msg('$250.000'));
+  await postWebhook(msg('01-11-2026'));
+  await postWebhook(msg('Tanda de prueba'));
+  assert.match(lastText(), /Resumen de la tanda/);
+  assert.match(lastText(), /Costo total: \$250\.000/);
+  assert.equal(batches().length, 0, 'nada se registra antes de confirmar');
+
+  await postWebhook(press(tandaButton('ok')));
+  const [b] = batches();
+  assert.equal(b.quantity, 120);
+  assert.equal(b.cost_total_clp, 250000);
+  assert.equal(b.produced_at, '2026-11-01');
+  assert.equal(b.notes, 'Tanda de prueba');
+  assert.equal(tandaStock(), 120);
+  assert.match(sent('editMessageText').at(-1).body.text, /Tanda #\d+ registrada: 120 hallacas.*\nStock disponible: 120/);
+  assert.equal(bot._flows.size, 0);
+});
+
+test('T2: atajo /tanda <cantidad> con Sin costo, Hoy y Sin notas; doble toque registra una sola vez', async () => {
+  await postWebhook(msg('/tanda 50'));
+  assert.match(lastText(), /\(2\/4\)/);
+  await postWebhook(press(tandaButton('nocost')));
+  await postWebhook(press(tandaButton('hoy')));
+  await postWebhook(press(tandaButton('nonotes')));
+  const ok = tandaButton('ok');
+  await postWebhook(press(ok));
+  await postWebhook(press(ok));
+  assert.equal(batches().length, 1);
+  assert.equal(batches()[0].cost_total_clp, 0);
+  assert.equal(batches()[0].notes, null);
+  assert.equal(tandaStock(), 50);
+  assert.match(sent('answerCallbackQuery').at(-1).body.text, /ya no está activo/);
+});
+
+test('T3: entradas inválidas se vuelven a preguntar; fecha futura no registra', async () => {
+  await postWebhook(msg('/tanda 0'));
+  assert.match(lastText(), /Uso: \/tanda/);
+  await postWebhook(msg('/tanda'));
+  for (const bad of ['cien', '0', '10001', '4.5']) {
+    await postWebhook(msg(bad));
+    assert.match(lastText(), /Cantidad inválida/, bad);
+  }
+  await postWebhook(msg('30'));
+  await postWebhook(msg('mucho'));
+  assert.match(lastText(), /Costo inválido/);
+  await postWebhook(msg('1000'));
+  for (const bad of ['31-02-2026', 'ayer', '2026/11/01']) {
+    await postWebhook(msg(bad));
+    assert.match(lastText(), /Fecha inválida/, bad);
+  }
+  await postWebhook(msg('01-01-2099'));
+  await postWebhook(press(tandaButton('nonotes')));
+  await postWebhook(press(tandaButton('ok')));
+  assert.match(sent('editMessageText').at(-1).body.text, /No se registró/);
+  assert.equal(batches().length, 0);
+  assert.equal(tandaStock(), 0);
+});
+
+test('T4: Cancelar y /cancelar descartan la tanda; botones de /nuevo no actúan sobre /tanda', async () => {
+  await postWebhook(msg('/tanda 40'));
+  await postWebhook(press(tandaButton('no')));
+  assert.match(sent('editMessageText').at(-1).body.text, /Tanda cancelada/);
+
+  await postWebhook(msg('/tanda 40'));
+  const t = tandaButton('nocost').split(':')[1];
+  await postWebhook(press(`n:${t}:nophone`));
+  assert.match(sent('answerCallbackQuery').at(-1).body.text, /ya no está activo/);
+  // Ni siquiera en el paso final un botón n: registra un pedido con datos de la tanda.
+  await postWebhook(press(tandaButton('nocost')));
+  await postWebhook(press(tandaButton('hoy')));
+  await postWebhook(press(tandaButton('nonotes')));
+  await postWebhook(press(`n:${t}:ok`));
+  assert.equal(countOrders(), 0);
+  await postWebhook(msg('/cancelar'));
+  assert.match(lastText(), /Tanda en curso descartada/);
+  assert.equal(batches().length, 0);
+});
