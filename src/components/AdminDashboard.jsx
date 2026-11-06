@@ -850,11 +850,14 @@ function ProduccionTab({ onCatalogChange, onViewStockExemptOrders }) {
             {movimientos.map((m) => {
               // Papelera sólo en los movimientos: las ventas se corrigen en su
               // pestaña, porque el stock las descuenta derivadas de `orders`.
-              const esMovimiento = m.kind === 'ajuste' || m.kind === 'tanda';
+              // STOCK FASE 2: los asientos de pedidos (venta, reverso, merma)
+              // traen tipo 'pedido' y el backend rechaza borrarlos.
+              const esMovimiento = m.tipo === 'movimiento';
               const etiqueta = m.kind === 'venta'
                 ? (m.delivered_at ? 'Pedido entregado' : (m.status === 'pendiente_pago' ? 'Pedido reservado' : 'Venta'))
                 : m.kind === 'tanda' ? 'Tanda'
                 : m.kind === 'merma' ? 'Merma'
+                : m.kind === 'reverso' ? 'Pedido liberado'
                 : (m.delta > 0 ? 'Ingreso' : 'Egreso');
               return (
                 <tr key={`${m.kind || 'venta'}-${m.id}`}>

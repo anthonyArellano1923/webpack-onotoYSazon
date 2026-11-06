@@ -1,15 +1,18 @@
 const { db } = require('../database/db');
 const { getStock, getStockBreakdown } = require('./packs.controller');
 const { esFechaValida, esFechaFutura, FECHA_FUTURA_MSG } = require('../utils/fecha');
-const { LIVE_ORDER_SQL, COUNTED_MOVEMENT_SQL } = require('../utils/orderState');
+const { LIVE_ORDER_SQL } = require('../utils/orderState');
+const { materializeExpirations } = require('../services/ledger');
 
 /**
  * ADR-3 (plan 09): el stock es un dato propio que vive en `stock_movements`.
- * Este controlador es su única puerta de escritura.
+ * Este controlador es la única puerta de escritura de ajustes manuales.
  *
- *   stock = Σ stock_movements.delta − Σ ventas vivas.quantity_hallacas
+ *   stock = Σ stock_movements.delta (contados) − Σ ventas vivas.quantity_hallacas
  *
- * Las ventas NO se escriben acá: se derivan de `orders` (packs.controller).
+ * Las ventas se siguen restando derivadas de `orders` (packs.controller).
+ * STOCK FASE 2: además dejan asientos 'venta'/'reverso' en el ledger, que
+ * escribe services/ledger.js (no este controlador) y que el kardex muestra.
  * Y `production_batches` no se consulta en ninguna de estas funciones — borrar
  * o editar una tanda no puede mover el stock (invariante I-1).
  */
@@ -20,8 +23,20 @@ const { LIVE_ORDER_SQL, COUNTED_MOVEMENT_SQL } = require('../utils/orderState');
 const MAX_DELTA = 10000;
 
 /**
- * Kardex: movimientos de stock + ventas vivas en una sola lista, por fecha
- * descendente, con saldo corrido. Sólo lectura.
+ * Kardex: el ledger completo (stock_movements) por fecha descendente, con
+ * saldo corrido. Sólo lectura, salvo poner al día los vencimientos.
+ *
+ * STOCK FASE 2: antes las ventas entraban DERIVADAS de `orders` con su fecha
+ * de creación, así que un pedido reactivado aparecía en su fecha original y
+ * un vencido simplemente desaparecía. Ahora cada línea es un asiento real con
+ * la fecha en que ocurrió: la venta, su vencimiento (con la fecha del
+ * vencimiento), la reactivación (con la de hoy), la cancelación, la merma.
+ *
+ * El saldo de la última línea coincide con getStock(): los asientos de un
+ * pedido suman −(su reserva actual), así que
+ *   Σ ledger = Σ movimientos contados − Σ reservas vivas = stock.
+ * Para que eso valga también en el minuto en que una reserva vence sin que
+ * nadie lo anote, primero se materializan los vencimientos pendientes.
  *
  * El saldo se acumula en orden ascendente (el saldo de una línea es el stock
  * que quedaba justo después de ella) y la lista se devuelve invertida, que es
@@ -29,64 +44,34 @@ const MAX_DELTA = 10000;
  */
 function getKardex(req, res) {
   try {
-    const movimientos = db.prepare(`
-      SELECT id, occurred_at, delta, reason, kind, batch_ref, created_at
-      FROM stock_movements
-      WHERE ${COUNTED_MOVEMENT_SQL}
+    materializeExpirations();
+
+    const ascendente = db.prepare(`
+      SELECT m.id, m.occurred_at, m.delta, m.reason, m.kind, m.batch_ref, m.order_id,
+             o.status, o.delivered_at, o.deleted_at
+      FROM stock_movements m
+      LEFT JOIN orders o ON o.id = m.order_id
+      ORDER BY m.occurred_at, m.created_at, m.id
     `).all().map((m) => ({
-      tipo: 'movimiento',
+      // 'movimiento' = ajuste o tanda (con papelera); 'pedido' = asiento de
+      // una venta, que se corrige desde la pestaña Ventas.
+      tipo: m.order_id === null && ['ajuste', 'tanda'].includes(m.kind) ? 'movimiento' : 'pedido',
       id: m.id,
+      order_id: m.order_id,
       fecha: m.occurred_at,
       delta: m.delta,
       motivo: m.reason,
       kind: m.kind,
       batch_ref: m.batch_ref,
-      _orden: m.created_at,
+      status: m.status ?? null,
+      delivered_at: m.delivered_at ?? null,
+      pedido_eliminado: m.deleted_at != null,
     }));
-
-    // PLAN-11: "vivas" = LIVE_ORDER_SQL; un pedido web vencido sale del kardex
-    // igual que sale del stock, para que el saldo final coincida con getStock().
-    // Ventas vivas: entran al kardex como consumo (delta negativo) pero NO son
-    // filas de stock_movements — son derivadas, y por eso no llevan papelera:
-    // se editan desde la pestaña Ventas.
-    // date(...,'localtime'): orders.created_at se guarda en UTC y los
-    // movimientos en fecha local — sin esto una venta de la tarde aparecía un
-    // día adelantada en el kardex. Mismo criterio que ventas_hoy en reportes.
-    const ventas = db.prepare(`
-      SELECT id, customer_name, quantity_hallacas, status, delivered_at,
-             date(created_at, 'localtime') AS fecha, created_at
-      FROM orders
-      WHERE ${LIVE_ORDER_SQL} AND quantity_hallacas > 0 AND stock_exempt = 0
-    `).all().map((o) => ({
-      tipo: 'venta',
-      id: o.id,
-      fecha: o.fecha,
-      delta: -o.quantity_hallacas,
-      motivo: `Pedido de ${o.customer_name || 'cliente'}${o.status === 'cortesia' ? ' (cortesía)' : ''}`,
-      kind: 'venta',
-      status: o.status,
-      delivered_at: o.delivered_at,
-      batch_ref: null,
-      _orden: o.created_at,
-    }));
-
-    const ascendente = [...movimientos, ...ventas].sort((a, b) => {
-      if (a.fecha !== b.fecha) return a.fecha < b.fecha ? -1 : 1;
-      if (a._orden !== b._orden) return a._orden < b._orden ? -1 : 1;
-      // H-4 (auditoría 10): `a.id - b.id` comparaba ids de DOS tablas distintas
-      // (stock_movements vs orders), así que con el mismo timestamp el orden
-      // salía al azar y el saldo corrido mostraba números imposibles (una venta
-      // con saldo negativo debajo de un ingreso). Empate → primero el ingreso:
-      // no se puede vender lo que todavía no entró.
-      if (a.tipo !== b.tipo) return a.tipo === 'movimiento' ? -1 : 1;
-      return a.id - b.id;
-    });
 
     let saldo = 0;
     for (const linea of ascendente) {
       saldo += linea.delta;
       linea.saldo = saldo;
-      delete linea._orden;
     }
 
     // H-2: hallacas en encargos (sólo por encargo), fuera del stock — se

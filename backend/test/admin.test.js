@@ -239,5 +239,9 @@ test('T16: el saldo final del kardex coincide con getStock() en un escenario mix
   assert.equal(res.body.movimientos[0].saldo, stock);
   assert.equal(res.body.stock, stock);
   assert.equal(res.body.encargos_por_coordinar, 20);
-  assert.equal(res.body.movimientos.filter((m) => m.tipo === 'venta').length, 2);
+  // STOCK FASE 2: el kardex es el ledger completo — cada pedido deja su venta
+  // y, si dejó de reservar, su reverso (el vencido y el cancelado).
+  const kinds = (k) => res.body.movimientos.filter((m) => m.kind === k).length;
+  assert.equal(kinds('venta'), 4);
+  assert.equal(kinds('reverso'), 2);
 });
