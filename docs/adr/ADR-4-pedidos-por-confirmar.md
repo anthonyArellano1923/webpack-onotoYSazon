@@ -39,7 +39,7 @@ El dueño pide además un tope de hallacas por cliente en la web, un registro de
   - Incluye encargos web (`stock_exempt = 1`, pack `pXL`).
   - Se valida `suma_actual + hallacas_del_pedido_nuevo`.
 - **D7.** Las ventas manuales (`source = 'admin'`) nacen confirmadas (`confirmed_at = datetime('now')`), sin `expires_at` y sin el límite de D6.
-- **D8. Encargo para próxima tanda** = venta manual con `encargo: true`, guardada con `stock_exempt = 1`. Se concreta con el flujo `confirmStock` existente.
+- **D8. Encargo para próxima tanda** = venta manual con `encargo: true`, guardada con `stock_exempt = 1`. Se concreta con el flujo `confirmStock` existente. Concretar un encargo también lo **confirma** (fija `confirmed_at`), porque implica que el dueño lo validó. Sin eso, un encargo web vencido quedaría «concretado» sin reservar stock, y uno por confirmar dejaría de reservar al pasar `expires_at`.
 - **D9.** El rechazo web por límite o falta de stock responde 409 `{ error, code }`:
   - `code`: `LIMITE_TELEFONO` o `SIN_STOCK`;
   - `error`: `Para un pedido así, ponte en contacto directo con el vendedor.`
@@ -57,9 +57,9 @@ El dueño pide además un tope de hallacas por cliente en la web, un registro de
 stateDiagram-v2
     [*] --> por_confirmar: pedido web (expires_at = ahora + holdHours)
     [*] --> confirmado: venta manual del panel
-    por_confirmar --> confirmado: confirm / status pagado o cortesía
+    por_confirmar --> confirmado: confirm / status pagado o cortesía / confirmStock
     por_confirmar --> vencido: pasa expires_at sin confirmar
-    vencido --> confirmado: reactivar (confirm), con chequeo de stock
+    vencido --> confirmado: reactivar (confirm o confirmStock), con chequeo de stock
     por_confirmar --> cancelado: rechazar
     vencido --> cancelado
     confirmado --> cancelado

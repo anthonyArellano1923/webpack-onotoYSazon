@@ -288,10 +288,13 @@ function updateOrder(req, res) {
     }
 
     // PLAN-11 (D2): confirmación explícita (confirm) o implícita (status final
-    // pagado/cortesía). Una vez fijado, confirmed_at no se borra.
+    // pagado/cortesía, o concretar el encargo). Una vez fijado, confirmed_at no
+    // se borra. confirmStock confirma porque concretar = el dueño lo validó
+    // (D8); sin esto, un encargo web vencido quedaba "concretado" sin reservar
+    // nada, y uno por confirmar dejaba de reservar al pasar expires_at.
     const alreadyConfirmed = order.confirmed_at !== null;
     const willConfirm = !alreadyConfirmed
-      && (confirm === true || finalStatus === 'pagado' || finalStatus === 'cortesia');
+      && (confirm === true || confirmingStock || finalStatus === 'pagado' || finalStatus === 'cortesia');
     const finalConfirmed = alreadyConfirmed || willConfirm;
 
     // PLAN-11 (D10): reserva antes y después con los valores FINALES.

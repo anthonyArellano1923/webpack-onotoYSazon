@@ -171,6 +171,29 @@ test('T11c: encargo no mueve el stock; confirmStock lo concreta con chequeo', ()
   assert.equal(h.getStock(), 10);
 });
 
+test('T11e: confirmStock sobre un encargo web vencido lo confirma y reserva', () => {
+  h.addStock(5);
+  const id = h.webOrder({ items: [{ packId: 'pXL', qty: 1 }], quantityHallacas: 10 }).body.order.id;
+  h.expire(id);
+
+  const sinStock = h.patch(id, { confirmStock: true, totalClp: 30000 });
+  assert.equal(sinStock.statusCode, 409);
+  assert.equal(sinStock.body.code, 'STOCK_INSUFICIENTE');
+  assert.equal(sinStock.body.requerido, 10);
+  const intacto = h.getOrder(id);
+  assert.equal(intacto.stock_exempt, 1);
+  assert.equal(intacto.confirmed_at, null);
+
+  h.addStock(10);
+  const ok = h.patch(id, { confirmStock: true, totalClp: 30000 });
+  assert.equal(ok.statusCode, 200);
+  assert.equal(ok.body.order.review, 'confirmado');
+  assert.equal(h.getStock(), 5);
+
+  h.expire(id);
+  assert.equal(h.getStock(), 5);
+});
+
 test('T11d: venta manual con status cancelado → 400', () => {
   h.addStock(10);
   assert.equal(h.manualSale({ quantityHallacas: 1, status: 'cancelado' }).statusCode, 400);
