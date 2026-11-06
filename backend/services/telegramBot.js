@@ -397,7 +397,9 @@ function applyItem(item) {
         const created = createSale(item.input);
         if (item.delivered) updateSale(created.id, { delivered: true });
         return created.id;
-      })();
+        // .immediate(): el lock se toma al empezar (ADR-4 §7); los
+        // .immediate() internos pasan a ser savepoints.
+      }).immediate();
       return { line: `✅ #${id} ${item.label}` };
     }
     updateSale(item.id, item.input, {
