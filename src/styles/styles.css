@@ -1682,3 +1682,7 @@ a { color: inherit; text-decoration: none; }
   .wa-fab { bottom: 16px; }
   .cart-fab { bottom: 80px; }
 }
+@media (max-width: 719px) {
+  .auth-modal__error .btn { min-height: 44px !important; padding: 8px 14px !important; }
+  .nav__brand, .social-pill { min-height: 44px; display: inline-flex; align-items: center; }
+}

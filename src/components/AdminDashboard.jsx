@@ -990,8 +990,9 @@ function UsuariosTab() {
   if (!users) return <p>Cargando…</p>;
 
   return (
-    <div className="admin-table-wrap">
+    <>
       {error && <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />}
+    <div className="admin-table-wrap">
       <table className="admin-table">
         <thead>
           <tr><th>Nombre</th><th>Teléfono</th><th>Correo</th><th>Dirección</th><th>Rol</th><th>Creado</th><th></th></tr>
@@ -1019,6 +1020,7 @@ function UsuariosTab() {
         </tbody>
       </table>
     </div>
+    </>
   );
 }
 
@@ -1053,8 +1055,9 @@ function PacksTab({ onCatalogChange }) {
   if (!packs) return <p>Cargando…</p>;
 
   return (
-    <div className="admin-table-wrap">
+    <>
       {error && <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />}
+    <div className="admin-table-wrap">
       <table className="admin-table">
         <thead>
           <tr><th>Pack</th><th>Hallacas</th><th>Precio CLP</th><th></th><th>Visible en la web</th></tr>
@@ -1091,6 +1094,7 @@ function PacksTab({ onCatalogChange }) {
         </tbody>
       </table>
     </div>
+    </>
   );
 }
 
