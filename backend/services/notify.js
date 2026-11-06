@@ -183,7 +183,7 @@ async function sweepOnce() {
     }
     const porVencer = db.prepare(`
       SELECT * FROM orders
-      WHERE confirmed_at IS NULL AND status != 'cancelado' AND reminder_sent_at IS NULL
+      WHERE deleted_at IS NULL AND confirmed_at IS NULL AND status != 'cancelado' AND reminder_sent_at IS NULL
         AND expires_at > datetime('now')
         AND expires_at <= datetime('now', '+' || ? || ' hours')
     `).all(reminderHours());
@@ -195,7 +195,7 @@ async function sweepOnce() {
 
     const vencidos = db.prepare(`
       SELECT * FROM orders
-      WHERE confirmed_at IS NULL AND status != 'cancelado' AND expired_notified_at IS NULL
+      WHERE deleted_at IS NULL AND confirmed_at IS NULL AND status != 'cancelado' AND expired_notified_at IS NULL
         AND expires_at <= datetime('now')
     `).all();
     const markExpired = db.prepare("UPDATE orders SET expired_notified_at = datetime('now') WHERE id = ?");

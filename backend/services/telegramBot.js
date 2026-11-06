@@ -203,7 +203,8 @@ const ACTIONS = {
  * @returns {object|undefined}
  */
 function getOrderRow(id) {
-  return db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
+  // STOCK FASE 2: un pedido borrado (soft delete) no existe para el bot.
+  return db.prepare('SELECT * FROM orders WHERE id = ? AND deleted_at IS NULL').get(id);
 }
 
 /**
@@ -610,7 +611,7 @@ function listActive() {
 function listPending() {
   const rows = db.prepare(`
     SELECT * FROM orders
-    WHERE status != 'cancelado' AND confirmed_at IS NULL
+    WHERE deleted_at IS NULL AND status != 'cancelado' AND confirmed_at IS NULL
       AND expires_at > datetime('now', '-7 days')
     ORDER BY expires_at
   `).all();

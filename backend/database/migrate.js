@@ -37,8 +37,9 @@ const STATUS_MAP_SQL = `
 // PLAN-11: NO agregar acá las columnas nuevas. Este swap solo corre en BDs muy
 // viejas y SIEMPRE antes de addOrdersStockExemptColumn y addOrdersReviewColumns,
 // que las añaden después. Pero cualquier recreación FUTURA de `orders` debe
-// incluir stock_exempt, confirmed_at, expires_at, reminder_sent_at y
-// expired_notified_at, Y copiarlas en el INSERT explícito: si no, el backfill
+// incluir stock_exempt, confirmed_at, expires_at, reminder_sent_at,
+// expired_notified_at y deleted_at (STOCK FASE 2), Y copiarlas en el INSERT
+// explícito (sin deleted_at, un pedido borrado volvería a estar vivo): si no, el backfill
 // confirmaría de golpe todos los pedidos web pendientes (ADR-4 §6).
 const ORDERS_FINAL_SQL = `
   CREATE TABLE orders_new (
@@ -348,6 +349,16 @@ function addOrdersReviewColumns(db) {
   `);
 }
 
+/* ---- orders: soft delete (STOCK FASE 2) ---- */
+function addOrdersDeletedAtColumn(db) {
+  const cols = tableColumns(db, 'orders');
+  if (cols.some((c) => c.name === 'deleted_at')) return;
+
+  console.log('→ Agregando columna orders.deleted_at (soft delete, STOCK FASE 2)...');
+  db.exec('ALTER TABLE orders ADD COLUMN deleted_at TEXT');
+  console.log('✓ Columna orders.deleted_at agregada.');
+}
+
 /* ---- stock_movements: ledger completo (STOCK FASE 2) ---- */
 
 // STOCK FASE 2: forma final de stock_movements. Cualquier recreación futura de
@@ -609,6 +620,8 @@ function runMigrations(db) {
   addOrdersReviewColumns(db);
   // STOCK FASE 2: después de las columnas de revisión, porque el backfill del
   // ledger usa LIVE_ORDER_SQL (confirmed_at, expires_at).
+  // Antes del ledger: LIVE_ORDER_SQL (que usa su backfill) lee deleted_at.
+  addOrdersDeletedAtColumn(db);
   migrateStockMovementsLedger(db);
   createOrderEventsTable(db);
   seedSettings(db);

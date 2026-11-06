@@ -11,14 +11,15 @@
  */
 
 // PLAN-11: sin alias de tabla → usar solo en consultas de una tabla (FROM orders).
-const LIVE_ORDER_SQL = "status != 'cancelado' AND (confirmed_at IS NOT NULL OR expires_at > datetime('now'))";
+// STOCK FASE 2: un pedido borrado (soft delete, deleted_at) nunca está vivo.
+const LIVE_ORDER_SQL = "deleted_at IS NULL AND status != 'cancelado' AND (confirmed_at IS NOT NULL OR expires_at > datetime('now'))";
 // PLAN-11: variante con alias `o.` para consultas con JOIN.
-const LIVE_ORDER_SQL_O = "o.status != 'cancelado' AND (o.confirmed_at IS NOT NULL OR o.expires_at > datetime('now'))";
+const LIVE_ORDER_SQL_O = "o.deleted_at IS NULL AND o.status != 'cancelado' AND (o.confirmed_at IS NOT NULL OR o.expires_at > datetime('now'))";
 
 // PLAN-11: contadores de revisión para reportes. Viven acá junto a
 // LIVE_ORDER_SQL para que ninguna consulta repita el filtro de 'cancelado'.
-const PENDING_REVIEW_SQL = "status != 'cancelado' AND confirmed_at IS NULL AND expires_at > datetime('now')";
-const EXPIRED_REVIEW_SQL = "status != 'cancelado' AND confirmed_at IS NULL AND expires_at <= datetime('now')";
+const PENDING_REVIEW_SQL = "deleted_at IS NULL AND status != 'cancelado' AND confirmed_at IS NULL AND expires_at > datetime('now')";
+const EXPIRED_REVIEW_SQL = "deleted_at IS NULL AND status != 'cancelado' AND confirmed_at IS NULL AND expires_at <= datetime('now')";
 
 // STOCK FASE 2: el ledger de stock_movements guarda también los asientos de
 // los pedidos ('venta' reserva, 'reverso' libera), pero esos asientos son la

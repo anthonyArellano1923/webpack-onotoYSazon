@@ -107,6 +107,11 @@ CREATE TABLE IF NOT EXISTS orders (
   expires_at          TEXT,   -- UTC; vence la reserva provisional del pedido web
   reminder_sent_at    TEXT,   -- aviso "por vencer" ya enviado (idempotencia)
   expired_notified_at TEXT,   -- aviso "vencido" ya enviado (idempotencia)
+  -- STOCK FASE 2: soft delete. Borrar marca la fecha y libera la reserva con
+  -- un asiento de reverso; la fila, sus ítems y su historia se conservan.
+  -- Toda consulta de pedidos visibles filtra deleted_at IS NULL (LIVE_ORDER_SQL
+  -- ya lo incluye).
+  deleted_at        TEXT,
   created_at        TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );

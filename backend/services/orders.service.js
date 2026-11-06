@@ -248,7 +248,7 @@ function updateSale(id, input, opts = {}) {
            delivered_at, customer_name, source,
            (${LIVE_ORDER_SQL}) AS live,
            COALESCE(expires_at > datetime('now'), 0) AS hold_open
-    FROM orders WHERE id = ?
+    FROM orders WHERE id = ? AND deleted_at IS NULL
   `);
 
   const applyUpdate = db.transaction(() => {

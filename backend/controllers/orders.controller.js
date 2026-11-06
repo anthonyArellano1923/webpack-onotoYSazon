@@ -203,7 +203,7 @@ function getMyOrders(req, res) {
   const orders = db.prepare(`
     SELECT id, status, delivery, date_hint, notes, total_clp, quantity_hallacas,
            confirmed_at, expires_at, created_at, updated_at
-    FROM orders WHERE user_id = ? ORDER BY created_at DESC
+    FROM orders WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at DESC
   `).all(userId);
 
   const getItems = db.prepare(`

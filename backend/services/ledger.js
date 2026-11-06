@@ -42,7 +42,7 @@ function orderLedgerNet(orderId) {
  */
 function readOrder(orderId) {
   return db.prepare(`
-    SELECT id, status, quantity_hallacas, stock_exempt, customer_name, expires_at,
+    SELECT id, status, quantity_hallacas, stock_exempt, customer_name, expires_at, deleted_at,
            (${LIVE_ORDER_SQL}) AS live,
            (${EXPIRED_REVIEW_SQL}) AS expired
     FROM orders WHERE id = ?
@@ -66,6 +66,7 @@ function defaultReason(o, reserved, target, hadRows) {
     return `Pedido #${o.id} de ${name}${o.status === 'cortesia' ? ' (cortesía)' : ''}`;
   }
   if (target > 0) return `Rebaja de cantidad del ${ref}`;
+  if (o.deleted_at) return `Eliminación del ${ref}`;
   if (o.status === 'cancelado') return `Cancelación del ${ref}`;
   return `Liberación del ${ref}`;
 }
@@ -78,9 +79,8 @@ function defaultReason(o, reserved, target, hadRows) {
  * the stock really came back.
  *
  * @param {number} orderId
- * @param {{fecha?: string|null, reason?: string, createdBy?: number|null, target?: number}} [ctx]
- *   `fecha` (YYYY-MM-DD) dates a new reservation; `target` overrides the
- *   computed reservation (used when the order is about to disappear).
+ * @param {{fecha?: string|null, reason?: string, createdBy?: number|null}} [ctx]
+ *   `fecha` (YYYY-MM-DD) dates a new reservation.
  * @returns {{delta: number, kind: string, expired: boolean}|null} Row written, or null.
  */
 function syncOrderLedger(orderId, ctx = {}) {
@@ -88,12 +88,12 @@ function syncOrderLedger(orderId, ctx = {}) {
   if (!o) return null;
   const net = orderLedgerNet(orderId);
   const reserved = -net;
-  const target = ctx.target ?? ((o.live && o.stock_exempt === 0) ? o.quantity_hallacas : 0);
+  const target = (o.live && o.stock_exempt === 0) ? o.quantity_hallacas : 0;
   if (target === reserved) return null;
 
   const delta = reserved - target;
   const kind = delta < 0 ? 'venta' : 'reverso';
-  const expired = delta > 0 && o.expired === 1 && ctx.target === undefined;
+  const expired = delta > 0 && o.expired === 1;
   const hadRows = db.prepare('SELECT 1 FROM stock_movements WHERE order_id = ? LIMIT 1').get(orderId) !== undefined;
   const reason = expired
     ? `Vencimiento del pedido #${o.id} sin confirmar`

@@ -9,7 +9,7 @@ const {
   createSale, updateSale,
 } = require('../services/orders.service');
 const { syncOrderLedger, catchUpOrder } = require('../services/ledger');
-const { listEvents } = require('../services/orderEvents');
+const { listEvents, recordEvent } = require('../services/orderEvents');
 
 // PLAN-12: vocabulario y topes viven en services/orders.service.js.
 
@@ -32,6 +32,7 @@ function getAllOrders(req, res) {
       COALESCE(o.customer_phone, u.phone) AS customer_phone
     FROM orders o
     LEFT JOIN users u ON u.id = o.user_id
+    WHERE o.deleted_at IS NULL
     ORDER BY o.created_at DESC
   `).all();
 
@@ -122,27 +123,37 @@ function updateOrder(req, res) {
 }
 
 /**
- * QA-12: borrado físico de una venta (a diferencia de 'cancelado', que
- * conserva la fila para historial). Pensado para errores/pruebas del admin.
- * order_items cae en cascada (ON DELETE CASCADE, schema.sql) y el stock
- * comprometido se libera automáticamente porque getStock() sólo resta las
- * ventas vivas que existen (ADR-3: las ventas no escriben movimientos).
+ * STOCK FASE 2: borrado lógico de una venta (DELETE /admin/orders/:id).
+ *
+ * Antes era físico (QA-12) y se perdía la historia. Ahora marca deleted_at:
+ * el pedido sale del panel, del stock y de los reportes (LIVE_ORDER_SQL filtra
+ * deleted_at), su reserva se libera con un asiento de reverso en el ledger y la
+ * bitácora anota "eliminado". Fila, ítems, asientos y eventos se conservan.
+ * Un segundo DELETE responde 404, igual que antes.
  */
 function deleteOrder(req, res) {
   // PLAN-11: id validado como entero positivo antes de tocar la BD.
   const id = parsePositiveId(req.params.id);
   if (!id) return res.status(400).json({ error: 'Id de pedido inválido.' });
-  const order = db.prepare('SELECT id FROM orders WHERE id = ?').get(id);
-  if (!order) return res.status(404).json({ error: 'Pedido no encontrado.' });
 
-  // STOCK FASE 2: el ledger registra que la reserva se liberó antes de que la
-  // fila desaparezca (primero se pone al día un vencimiento pendiente).
-  db.transaction(() => {
+  const softDelete = db.transaction(() => {
+    const order = db.prepare('SELECT id FROM orders WHERE id = ? AND deleted_at IS NULL').get(id);
+    if (!order) return false;
+    // Primero se pone al día un vencimiento no anotado: si el pedido ya había
+    // liberado su reserva al vencer, el reverso va con esa fecha y no acá.
     catchUpOrder(id);
-    syncOrderLedger(id, { target: 0, reason: `Eliminación del pedido #${id}` });
-    db.prepare('DELETE FROM orders WHERE id = ?').run(id);
-  }).immediate();
-  return res.json({ message: 'Venta eliminada' });
+    db.prepare("UPDATE orders SET deleted_at = datetime('now') WHERE id = ?").run(id);
+    syncOrderLedger(id);
+    recordEvent(id, 'eliminado', 'admin');
+    return true;
+  });
+
+  try {
+    if (!softDelete.immediate()) return res.status(404).json({ error: 'Pedido no encontrado.' });
+    return res.json({ message: 'Venta eliminada' });
+  } catch (err) {
+    return sendError(res, err, 'Error al eliminar la venta.', 'deleteOrder error');
+  }
 }
 
 /**
@@ -314,7 +325,7 @@ function getReports(req, res) {
   `).all();
 
   const porEstado = db.prepare(`
-    SELECT status, COUNT(*) AS n FROM orders WHERE stock_exempt = 0 GROUP BY status
+    SELECT status, COUNT(*) AS n FROM orders WHERE stock_exempt = 0 AND deleted_at IS NULL GROUP BY status
   `).all();
 
   // PLAN-11: pedidos web aún sin validar y vencidos (incluye encargos web:
