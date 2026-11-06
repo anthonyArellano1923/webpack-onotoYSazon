@@ -46,34 +46,71 @@ function links(order) {
 }
 
 /**
- * Sends a plain-text message through the Telegram Bot API.
+ * Calls a Telegram Bot API method. Never throws.
+ * PLAN-12: extraído de send() para que el bot (telegramBot.js) use el mismo
+ * cliente para answerCallbackQuery, editMessageText y setWebhook.
+ * @param {string} method - Bot API method name (e.g. 'sendMessage').
+ * @param {object} payload - JSON body.
+ * @returns {Promise<{ok: boolean, skipped: boolean, result?: any, description?: string}>}
+ *   `skipped` is true when TELEGRAM_BOT_TOKEN is not configured.
+ */
+async function callApi(method, payload) {
+  const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+  if (!token) return { ok: false, skipped: true };
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+    });
+    const body = await res.json().catch(() => ({}));
+    // La Bot API puede responder 200 con { ok: false }: solo es éxito si ambos.
+    if (res.ok && body.ok) return { ok: true, skipped: false, result: body.result };
+    // PLAN-12: editar con el mismo texto responde 400 "message is not
+    // modified"; no es un error real (p. ej. doble toque en un botón).
+    if (/message is not modified/i.test(body.description || '')) return { ok: true, skipped: false };
+    console.warn(`[notify] Telegram ${method} respondió ${res.status}: ${body.description || 'sin detalle'}`);
+    return { ok: false, skipped: false, description: body.description };
+  } catch (err) {
+    console.warn(`[notify] Error llamando a Telegram ${method}: ${err.message}`);
+    return { ok: false, skipped: false, description: err.message };
+  }
+}
+
+/**
+ * Sends a plain-text message to the owner's chat (TELEGRAM_CHAT_ID).
  * Never throws.
  * @param {string} text
+ * @param {object} [extra] - Extra sendMessage fields (PLAN-12: reply_markup).
  * @returns {Promise<{sent: boolean, skipped: boolean}>} `skipped` is true when
  *   Telegram is not configured (nothing was attempted).
  */
-async function send(text) {
+async function send(text, extra = {}) {
   const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
   const chatId = (process.env.TELEGRAM_CHAT_ID || '').trim();
   if (!token || !chatId) {
     console.info('[notify] Telegram no configurado; aviso omitido.');
     return { sent: false, skipped: true };
   }
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
-      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
-    });
-    const body = await res.json().catch(() => ({}));
-    // La Bot API puede responder 200 con { ok: false }: solo es éxito si ambos.
-    if (res.ok && body.ok) return { sent: true, skipped: false };
-    console.warn(`[notify] Telegram respondió ${res.status}: ${body.description || 'sin detalle'}`);
-  } catch (err) {
-    console.warn(`[notify] Error enviando a Telegram: ${err.message}`);
-  }
-  return { sent: false, skipped: false };
+  const r = await callApi('sendMessage', { chat_id: chatId, text, disable_web_page_preview: true, ...extra });
+  return { sent: r.ok, skipped: false };
+}
+
+/**
+ * PLAN-12 (ADR-5): inline buttons for an order notice. El callback_data lleva
+ * solo `acción:id`; el backend relee el pedido antes de aplicar, así que un
+ * botón viejo nunca decide nada por sí mismo.
+ * @param {number} id - Order id.
+ * @returns {{inline_keyboard: Array<Array<{text: string, callback_data: string}>>}}
+ */
+function orderKeyboard(id) {
+  return {
+    inline_keyboard: [
+      [{ text: '✅ Confirmar', callback_data: `c:${id}` }, { text: '✖️ Rechazar', callback_data: `x:${id}` }],
+      [{ text: '💰 Pagado', callback_data: `p:${id}` }, { text: '📦 Entregado', callback_data: `e:${id}` }],
+    ],
+  };
 }
 
 /**
@@ -87,7 +124,8 @@ async function newOrder(order) {
     `🆕 Pedido web #${order.id}${encargo} — ${order.customer_name} — ${order.quantity_hallacas} hallacas (${order.delivery}) — vence ${fmtChile(order.expires_at)} (hora Chile)`,
     links(order),
   ].join('\n');
-  return send(text);
+  // PLAN-12: el aviso trae botones para operar el pedido sin abrir el panel.
+  return send(text, { reply_markup: orderKeyboard(order.id) });
 }
 
 /**
@@ -173,4 +211,6 @@ function startOrderSweeper() {
   return setInterval(run, SWEEP_INTERVAL_MS);
 }
 
-module.exports = { newOrder, orderExpiringSoon, orderExpired, sweepOnce, startOrderSweeper, send };
+module.exports = {
+  newOrder, orderExpiringSoon, orderExpired, sweepOnce, startOrderSweeper, send, callApi, orderKeyboard, fmtChile,
+};
