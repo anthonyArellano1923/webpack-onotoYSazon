@@ -1,19 +1,98 @@
 const BASE = process.env.API_URL || '/api';
 
-async function apiFetch(path, options = {}) {
-  const token = localStorage.getItem('oys-token');
-  const res = await fetch(`${BASE}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options.headers,
-    },
-  });
+// PLAN-11: timeout por defecto de las llamadas (cold start de Render incluido).
+const DEFAULT_TIMEOUT_MS = 15000;
+const MSG_NETWORK = 'No pudimos conectar con el servidor. Intenta de nuevo.';
+const MSG_TIMEOUT = 'El servidor tardó demasiado en responder. Intenta de nuevo.';
+const MSG_SERVER = 'El servidor tuvo un problema. Intenta de nuevo en unos minutos.';
+const MSG_SESSION = 'Tu sesión expiró. Inicia sesión nuevamente.';
 
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Error del servidor');
-  return data;
+// PLAN-11: suscriptores del cierre de sesión forzado (401 con token presente).
+const unauthorizedListeners = new Set();
+
+/**
+ * Subscribes to forced logouts (a 401 received while a token was stored).
+ * @param {() => void} fn Callback invoked after the token has been cleared.
+ * @returns {() => void} Unsubscribe function.
+ */
+export function onUnauthorized(fn) {
+  unauthorizedListeners.add(fn);
+  return () => unauthorizedListeners.delete(fn);
+}
+
+/** Builds an Error carrying status/code/data so callers can branch on them. */
+function apiError(message, status, code, data) {
+  const err = new Error(message);
+  err.status = status;
+  err.code = code;
+  err.data = data || {};
+  return err;
+}
+
+/**
+ * Thin fetch wrapper. PLAN-11 hardening:
+ * - aborts after `timeoutMs` (default 15 s) with a clear message;
+ * - never leaks raw parser/network errors ("Unexpected token…") to the UI;
+ * - a 401 on a request that carried a token clears the session and notifies
+ *   subscribers (not for /auth/*, where 401 means wrong credentials);
+ * - every failure is an Error with `status`, `code` and `data`.
+ */
+async function apiFetch(path, { timeoutMs = DEFAULT_TIMEOUT_MS, ...options } = {}) {
+  const token = localStorage.getItem('oys-token');
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+
+  let res;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers,
+      },
+    });
+  } catch {
+    clearTimeout(timer);
+    // status 0 = nunca hubo respuesta. TIMEOUT se distingue porque un POST
+    // pudo haberse procesado igualmente en el servidor.
+    throw timedOut
+      ? apiError(MSG_TIMEOUT, 0, 'TIMEOUT')
+      : apiError(MSG_NETWORK, 0, 'NETWORK');
+  }
+
+  // El cuerpo también cuenta para el timeout: se lee antes de limpiar el timer.
+  let data = {};
+  try {
+    data = await res.json();
+  } catch {
+    data = {}; // cuerpo vacío o no-JSON (p. ej. HTML de un proxy): sin error crudo
+  } finally {
+    clearTimeout(timer);
+  }
+  if (data === null || typeof data !== 'object') data = {};
+
+  if (res.ok) return data;
+
+  if (res.status === 401 && token && !path.startsWith('/auth/')) {
+    // Solo si el token guardado sigue siendo el enviado: evita cerrar una
+    // sesión nueva si el usuario volvió a entrar mientras la petición volaba.
+    if (localStorage.getItem('oys-token') === token) {
+      clearAuth();
+      unauthorizedListeners.forEach((fn) => { try { fn(); } catch { /* no crítico */ } });
+    }
+    throw apiError(MSG_SESSION, 401, 'SESSION_EXPIRED', data);
+  }
+
+  if (res.status >= 500 && res.status !== 503) {
+    throw apiError(MSG_SERVER, res.status, data.code, data);
+  }
+  const msg = (typeof data.error === 'string' && data.error)
+    || data.errors?.[0]?.msg
+    || (res.status >= 500 ? MSG_SERVER : MSG_NETWORK);
+  throw apiError(msg, res.status, data.code, data);
 }
 
 export const registerUser = (body) =>
@@ -22,8 +101,10 @@ export const registerUser = (body) =>
 export const loginUser = (body) =>
   apiFetch('/auth/login', { method: 'POST', body: JSON.stringify(body) });
 
+// PLAN-11: timeout más holgado para crear pedidos (no es idempotente: abortar
+// antes de tiempo podría dejar un pedido creado sin que el cliente lo sepa).
 export const placeOrder = (body) =>
-  apiFetch('/orders', { method: 'POST', body: JSON.stringify(body) });
+  apiFetch('/orders', { method: 'POST', body: JSON.stringify(body), timeoutMs: 25000 });
 
 export const getMyOrders = () => apiFetch('/orders/mine');
 

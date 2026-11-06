@@ -8,7 +8,7 @@ import {
 } from '../services/api';
 import { formatCLP } from './Sections';
 import { normalizePhone, phoneToDigits } from '../utils/phone';
-import { IconClose, IconTrash } from './Icons';
+import { IconClose, IconTrash, IconWhatsapp } from './Icons';
 
 // QA-16: 'entregado'/'pendiente_entrega' salieron del enum de estado — la
 // entrega es ahora su propia columna (delivered_at), no un estado de pago.
@@ -27,6 +27,51 @@ function formatLocalDate(utc) {
   return date.toLocaleString('es-CL', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+/** PLAN-11: marca devuelta cuando el admin cancela el diálogo de «forzar». */
+const FORCE_CANCELLED = Symbol('force-cancelled');
+
+/**
+ * PLAN-11 (D10): ejecuta `call(body)`; si el backend responde 409
+ * STOCK_INSUFICIENTE pide confirmación y reenvía con `force: true`.
+ * `requerido` es el incremento de reserva, así que el stock resultante es
+ * `stock - requerido`. Devuelve FORCE_CANCELLED si el admin no acepta.
+ * @param {(body: object) => Promise<any>} call
+ * @param {object} body
+ */
+async function callWithForce(call, body) {
+  try {
+    return await call(body);
+  } catch (e) {
+    if (e.status !== 409 || e.code !== 'STOCK_INSUFICIENTE' || body.force) throw e;
+    const stock = Number(e.data?.stock);
+    const requerido = Number(e.data?.requerido);
+    const msg = Number.isFinite(stock) && Number.isFinite(requerido)
+      ? `Esto deja el stock en ${stock - requerido}. ¿Registrar igual?`
+      : 'No hay stock suficiente. ¿Registrar igual?';
+    if (!window.confirm(msg)) return FORCE_CANCELLED;
+    return call({ ...body, force: true });
+  }
+}
+
+/** PLAN-11: enlace wa.me al cliente (solo dígitos; un celular de 9 dígitos lleva el 56). */
+function whatsappLink(phone) {
+  let digits = String(phone || '').replace(/\D/g, '');
+  if (digits.length === 9) digits = `56${digits}`;
+  return digits ? `https://wa.me/${digits}` : null;
+}
+
+/** PLAN-11: minutos que faltan para `expires_at` (UTC); puede ser ≤ 0. */
+function minutesLeft(expiresAt, now) {
+  if (!expiresAt) return null;
+  return Math.floor((new Date(expiresAt.replace(' ', 'T') + 'Z').getTime() - now) / 60000);
+}
+
+function formatCountdown(mins) {
+  if (mins == null) return '—';
+  if (mins <= 0) return 'venció';
+  return `vence en ${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m`;
+}
+
 // QA-16: pestaña "Producción" nueva, entre Ventas y Usuarios.
 const TABS = [
   { id: 'resumen', label: 'Resumen' },
@@ -41,7 +86,7 @@ const TABS = [
  * Panel de administración: réplica del Excel de control de ventas del dueño.
  * Pantalla completa (no modal) porque las tablas necesitan espacio.
  */
-export default function AdminDashboard({ onClose, onCatalogChange }) {
+export default function AdminDashboard({ onClose, onCatalogChange, onPendingChange, pendingCount = 0 }) {
   const [tab, setTab] = useState('resumen');
   const [showStockExemptOnly, setShowStockExemptOnly] = useState(false);
 
@@ -76,12 +121,16 @@ export default function AdminDashboard({ onClose, onCatalogChange }) {
               if (t.id === 'ventas') setShowStockExemptOnly(false);
             }}>
             {t.label}
+            {/* PLAN-11: pedidos por confirmar */}
+            {t.id === 'ventas' && pendingCount > 0 &&
+              <span className="icon-btn__badge" style={{ position: 'static', marginLeft: 6, display: 'inline-flex' }}
+                aria-label={`${pendingCount} pedidos por confirmar`}>{pendingCount}</span>}
           </button>
         ))}
       </div>
 
       {tab === 'resumen' && <ResumenTab />}
-      {tab === 'ventas' && <VentasTab onCatalogChange={onCatalogChange}
+      {tab === 'ventas' && <VentasTab onCatalogChange={onCatalogChange} onPendingChange={onPendingChange}
         showStockExemptOnly={showStockExemptOnly}
         onClearStockExemptFilter={() => setShowStockExemptOnly(false)} />}
       {tab === 'produccion' && <ProduccionTab onCatalogChange={onCatalogChange}
@@ -130,6 +179,9 @@ function ResumenTab() {
     // "modo sin lotes" que permitiera vender sin existencias.
     { label: 'Hallacas en stock', value: reports.stock },
     { label: 'Ticket promedio', value: formatCLP(reports.ticket_promedio) },
+    // PLAN-11: pedidos web sin validar y los que vencieron (liberaron stock).
+    ...(reports.por_confirmar ? [{ label: 'Por confirmar', value: reports.por_confirmar.n, sub: `${reports.por_confirmar.hallacas} hallacas reservadas` }] : []),
+    ...(reports.vencidos ? [{ label: 'Vencidos', value: reports.vencidos.n, sub: `${reports.vencidos.hallacas} hallacas liberadas` }] : []),
     { label: 'Ventas de hoy', value: `${reports.ventas_hoy.n} · ${formatCLP(reports.ventas_hoy.total)}` },
   ];
 
@@ -152,7 +204,7 @@ function ResumenTab() {
       <div className="admin-cards">
         {Object.entries(reports.ventas_por_estado).map(([status, n]) => (
           <div key={status} className="admin-card">
-            <p className="admin-card__label">{STATUS_LABELS[status] || status}</p>
+            <p className="admin-card__label">{STATUS_LABELS[status] || { por_confirmar: 'Por confirmar', vencido: 'Vencidos', vencidos: 'Vencidos' }[status] || status}</p>
             <p className="admin-card__value">{n}</p>
           </div>
         ))}
@@ -163,26 +215,39 @@ function ResumenTab() {
 
 /* ============================== Ventas ============================== */
 
-function VentasTab({ onCatalogChange, showStockExemptOnly, onClearStockExemptFilter }) {
+function VentasTab({ onCatalogChange, onPendingChange, showStockExemptOnly, onClearStockExemptFilter }) {
   const [orders, setOrders] = useState(null);
+  // PLAN-11: `error` (fallo de carga) reemplaza la tabla; `actionError` es un
+  // banner sobre ella para que un fallo de acción no oculte los datos.
   const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [now, setNow] = useState(() => Date.now());
   const [showForm, setShowForm] = useState(false);
   const [editingEncargoId, setEditingEncargoId] = useState(null);
 
   const load = useCallback(() => {
-    adminGetOrders().then((d) => setOrders(d.orders)).catch((e) => setError(e.message));
-  }, []);
+    adminGetOrders().then((d) => { setOrders(d.orders); onPendingChange?.(); }).catch((e) => setError(e.message));
+  }, [onPendingChange]);
   useEffect(load, [load]);
 
+  // PLAN-11: la cuenta regresiva se recalcula cada minuto; se limpia al salir.
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(t);
+  }, []);
+
   async function patchOrder(id, body) {
+    setActionError('');
     try {
-      await adminUpdateOrder(id, body);
+      const r = await callWithForce((b) => adminUpdateOrder(id, b), body);
+      if (r === FORCE_CANCELLED) { load(); return; } // restaura el select
       load();
       // QA-13: cambiar el estado de una venta (cancelar/restaurar) o marcarla
       // entregada mueve el stock comprometido/físico — refrescar la web pública.
       onCatalogChange?.();
     } catch (e) {
-      setError(e.message);
+      setActionError(e.message);
+      load();
     }
   }
 
@@ -195,16 +260,23 @@ function VentasTab({ onCatalogChange, showStockExemptOnly, onClearStockExemptFil
       // QA-13: borrar una venta libera el stock comprometido.
       onCatalogChange?.();
     } catch (e) {
-      setError(e.message);
+      setActionError(e.message);
     }
   }
 
+  async function rejectOrder(o) {
+    // PLAN-11: rechazar = cancelar; libera la reserva (no requiere chequeo de stock).
+    if (!window.confirm(`¿Rechazar el pedido de ${o.customer.name || 'cliente sin nombre'} (${o.quantity_hallacas} hallacas)? Se libera su stock.`)) return;
+    await patchOrder(o.id, { status: 'cancelado' });
+  }
+
   async function confirmEncargo(o, values) {
-    await adminUpdateOrder(o.id, {
+    const r = await callWithForce((b) => adminUpdateOrder(o.id, b), {
       confirmStock: true,
       quantityHallacas: values.quantityHallacas,
       totalClp: values.totalClp,
     });
+    if (r === FORCE_CANCELLED) return FORCE_CANCELLED;
     setEditingEncargoId(null);
     load();
     onCatalogChange?.();
@@ -212,6 +284,12 @@ function VentasTab({ onCatalogChange, showStockExemptOnly, onClearStockExemptFil
 
   if (error) return <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />;
   if (!orders) return <p>Cargando…</p>;
+
+  // PLAN-11: pedidos web sin validar (los cancelados no cuentan aunque `review` los marque).
+  const porConfirmar = orders
+    .filter((o) => o.review === 'por_confirmar' && o.status !== 'cancelado')
+    .sort((a, b) => String(a.expires_at).localeCompare(String(b.expires_at)));
+  const vencidos = orders.filter((o) => o.review === 'vencido' && o.status !== 'cancelado');
 
   const visibleOrders = showStockExemptOnly
     ? orders.filter((o) => (o.stock_exempt === true || o.stock_exempt === 1) && o.status !== 'cancelado')
@@ -243,6 +321,41 @@ function VentasTab({ onCatalogChange, showStockExemptOnly, onClearStockExemptFil
         </div>
       }
 
+      {actionError &&
+        <div role="alert" className="auth-modal__error" style={{ margin: '0 0 12px', display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>{actionError}</span>
+          <button className="btn btn--glass" style={{ minHeight: 44, minWidth: 44, padding: '4px 12px' }}
+            onClick={() => setActionError('')} aria-label="Cerrar aviso">✕</button>
+        </div>
+      }
+
+      {/* PLAN-11: bloque «Por confirmar» en formato tarjeta (legible a 375 px) */}
+      <h3 style={{ margin: '0 0 10px', fontSize: 15, fontWeight: 700 }}>Por confirmar ({porConfirmar.length})</h3>
+      {porConfirmar.length === 0 &&
+        <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--fg-muted)' }}>No hay pedidos esperando confirmación.</p>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+        {porConfirmar.map((o) => (
+          <OrderReviewCard key={o.id} order={o} now={now} variant="por_confirmar"
+            onConfirm={() => patchOrder(o.id, { confirm: true })}
+            onReject={() => rejectOrder(o)} />
+        ))}
+      </div>
+
+      <details style={{ marginBottom: 16 }}>
+        <summary style={{ cursor: 'pointer', minHeight: 44, display: 'flex', alignItems: 'center', fontSize: 15, fontWeight: 700 }}>
+          Vencidos ({vencidos.length})
+        </summary>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
+          {vencidos.length === 0 &&
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--fg-muted)' }}>Ningún pedido venció sin confirmar.</p>}
+          {vencidos.map((o) => (
+            <OrderReviewCard key={o.id} order={o} now={now} variant="vencido"
+              onConfirm={() => patchOrder(o.id, { confirm: true })}
+              onReject={() => rejectOrder(o)} />
+          ))}
+        </div>
+      </details>
+
       <div className="admin-table-wrap">
         <table className="admin-table">
           <thead>
@@ -254,6 +367,8 @@ function VentasTab({ onCatalogChange, showStockExemptOnly, onClearStockExemptFil
           <tbody>
             {visibleOrders.map((o) => {
               const isStockExempt = (o.stock_exempt === true || o.stock_exempt === 1) && o.status !== 'cancelado';
+              // PLAN-11: no se entrega un pedido web sin confirmar (el backend responde 409).
+              const unconfirmed = o.review === 'por_confirmar' || o.review === 'vencido';
               return (
               <Fragment key={o.id}>
               <tr style={isStockExempt ? { background: 'rgba(183, 121, 31, 0.1)' } : undefined}>
@@ -263,6 +378,11 @@ function VentasTab({ onCatalogChange, showStockExemptOnly, onClearStockExemptFil
                   {isStockExempt &&
                     <span style={{ display: 'block', marginTop: 3, fontSize: 11.5, fontWeight: 700, color: 'var(--onoto-crimson, #880D1E)' }}>
                       Encargo por confirmar
+                    </span>
+                  }
+                  {unconfirmed && o.status !== 'cancelado' &&
+                    <span style={{ display: 'block', marginTop: 3, fontSize: 11.5, fontWeight: 700, color: 'var(--onoto-crimson, #880D1E)' }}>
+                      {o.review === 'vencido' ? 'Vencido' : 'Por confirmar'}
                     </span>
                   }
                 </td>
@@ -286,12 +406,13 @@ function VentasTab({ onCatalogChange, showStockExemptOnly, onClearStockExemptFil
                 <td style={{ textAlign: 'center' }}>
                   <input type="checkbox" checked={!!o.delivered_at}
                     onChange={(e) => patchOrder(o.id, { delivered: e.target.checked })}
-                    disabled={isStockExempt}
-                    title={isStockExempt ? 'Confirma el encargo y reserva su stock antes de marcarlo como entregado.' : undefined}
+                    disabled={isStockExempt || unconfirmed}
+                    title={isStockExempt ? 'Confirma el encargo y reserva su stock antes de marcarlo como entregado.'
+                      : unconfirmed ? 'Confirma el pedido antes de marcarlo como entregado.' : undefined}
                     aria-label={isStockExempt
                       ? `Confirma primero el encargo de ${o.customer.name || 'cliente'}`
                       : `Marcar entregada la venta de ${o.customer.name || 'cliente'}`}
-                    style={{ cursor: isStockExempt ? 'not-allowed' : 'pointer', width: 18, height: 18 }} />
+                    style={{ cursor: (isStockExempt || unconfirmed) ? 'not-allowed' : 'pointer', width: 18, height: 18 }} />
                 </td>
                 <td>{o.source}</td>
                 <td>{o.delivery}{o.address ? ` · ${o.address}` : ''}</td>
@@ -336,6 +457,49 @@ function VentasTab({ onCatalogChange, showStockExemptOnly, onClearStockExemptFil
   );
 }
 
+/**
+ * PLAN-11: tarjeta de un pedido web por confirmar o vencido. Formato tarjeta
+ * (no tabla) para que se lea a 375 px sin scroll horizontal.
+ */
+function OrderReviewCard({ order: o, now, variant, onConfirm, onReject }) {
+  const wa = whatsappLink(o.customer.phone);
+  const name = o.customer.name || 'cliente';
+  const btn = { minHeight: 44, minWidth: 44, padding: '6px 14px' };
+  return (
+    <div style={{
+      border: '1px solid var(--border, rgba(0,0,0,0.15))', borderRadius: 12, padding: 12,
+      display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0,
+    }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: 6 }}>
+        <strong style={{ overflowWrap: 'anywhere' }}>{name}</strong>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: variant === 'vencido' ? 'var(--onoto-crimson, #880D1E)' : 'var(--onoto-gold, #B7791F)' }}>
+          {variant === 'vencido' ? 'Venció' : formatCountdown(minutesLeft(o.expires_at, now))}
+        </span>
+      </div>
+      <div style={{ fontSize: 13, color: 'var(--fg-muted)', overflowWrap: 'anywhere' }}>
+        {o.customer.phone || 'Sin teléfono'} · {o.quantity_hallacas} hallacas · {o.delivery}
+        {o.address ? ` · ${o.address}` : ''}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {wa &&
+          <a className="btn btn--glass" style={{ ...btn, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            href={wa} target="_blank" rel="noopener noreferrer" aria-label={`WhatsApp a ${name}`}>
+            <IconWhatsapp size={16} /> WhatsApp
+          </a>}
+        <button className="btn btn--primary" style={btn} onClick={onConfirm}
+          aria-label={`${variant === 'vencido' ? 'Reactivar' : 'Confirmar'} pedido de ${name}`}>
+          {variant === 'vencido' ? 'Reactivar' : 'Confirmar'}
+        </button>
+        {variant === 'por_confirmar' &&
+          <button className="btn btn--glass" style={btn} onClick={onReject}
+            aria-label={`Rechazar pedido de ${name}`}>
+            Rechazar
+          </button>}
+      </div>
+    </div>
+  );
+}
+
 function ConfirmEncargoForm({ order, onConfirm, onCancel }) {
   const [quantity, setQuantity] = useState(String(order.quantity_hallacas ?? ''));
   const [total, setTotal] = useState(order.total_clp == null ? '' : String(order.total_clp));
@@ -354,7 +518,9 @@ function ConfirmEncargoForm({ order, onConfirm, onCancel }) {
     setSaving(true);
     setError('');
     try {
-      await onConfirm({ quantityHallacas: quantityNumber, totalClp: totalNumber });
+      const r = await onConfirm({ quantityHallacas: quantityNumber, totalClp: totalNumber });
+      // PLAN-11: si el admin no acepta forzar, el botón no debe quedar en «Confirmando…».
+      if (r === FORCE_CANCELLED) setSaving(false);
     } catch (err) {
       setError(err.message);
       setSaving(false);
@@ -403,6 +569,8 @@ function ConfirmEncargoForm({ order, onConfirm, onCancel }) {
 
 /** Ventas que no pasaron por la web: pedidos grandes, cortesías, WhatsApp directo. */
 function ManualSaleForm({ onCreated }) {
+  // PLAN-11: encargo para próxima tanda (stock_exempt; total opcional).
+  const [encargo, setEncargo] = useState(false);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [qty, setQty] = useState('');
@@ -425,7 +593,7 @@ function ManualSaleForm({ onCreated }) {
     setSaving(true);
     setError('');
     try {
-      await adminCreateSale({
+      const r = await callWithForce(adminCreateSale, {
         customerName: name.trim(),
         customerPhone: phone ? normalizePhone(phone) : undefined,
         quantityHallacas: qtyNum,
@@ -433,7 +601,9 @@ function ManualSaleForm({ onCreated }) {
         paymentMethod: method || undefined,
         status,
         notes: notes.trim() || undefined,
+        ...(encargo ? { encargo: true } : {}),
       });
+      if (r === FORCE_CANCELLED) return; // el `finally` reactiva el botón
       onCreated();
     } catch (e) {
       setError(e.message);
@@ -480,8 +650,14 @@ function ManualSaleForm({ onCreated }) {
       </label>
       <label>Estado
         <select className="form-input" value={status} onChange={(e) => setStatus(e.target.value)}>
-          {Object.entries(STATUS_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          {/* PLAN-11: el backend rechaza crear una venta ya cancelada */}
+          {Object.entries(STATUS_LABELS).filter(([v]) => v !== 'cancelado').map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>
+      </label>
+      <label style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 10, minHeight: 44 }}>
+        <input type="checkbox" checked={encargo} onChange={(e) => setEncargo(e.target.checked)}
+          style={{ width: 20, height: 20 }} />
+        Encargo para próxima tanda (no descuenta stock ahora)
       </label>
       <label style={{ gridColumn: '1 / -1' }}>Comentarios
         <input className="form-input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Opcional" />
@@ -515,6 +691,19 @@ function ProduccionTab({ onCatalogChange, onViewStockExemptOrders }) {
   const [kardex, setKardex] = useState(null);
   const [error, setError] = useState('');
   const [editingBatchId, setEditingBatchId] = useState(null);
+  // PLAN-11: aviso tras crear una tanda si hay encargos esperando stock.
+  const [encargoNotice, setEncargoNotice] = useState(null);
+
+  async function announceEncargos() {
+    try {
+      const d = await adminGetOrders();
+      const encargos = (d.orders || []).filter((o) => (o.stock_exempt === true || o.stock_exempt === 1) && o.status !== 'cancelado');
+      const hallacas = encargos.reduce((sum, o) => sum + (o.quantity_hallacas || 0), 0);
+      setEncargoNotice(encargos.length > 0 ? { n: encargos.length, hallacas } : null);
+    } catch {
+      setEncargoNotice(null); // el aviso es accesorio; el kardex ya muestra los encargos
+    }
+  }
 
   const load = useCallback(() => {
     adminGetBatches().then((d) => { setBatches(d.batches); setTotals(d.totals); }).catch((e) => setError(e.message));
@@ -588,6 +777,21 @@ function ProduccionTab({ onCatalogChange, onViewStockExemptOrders }) {
       <p style={{ margin: '8px 0 0', fontSize: 12.5, color: 'var(--fg-muted)' }}>
         Ingresos +{Math.abs(kardex.ingresos)} · Egresos −{Math.abs(kardex.egresos)} · Comprometidas por ventas −{Math.abs(kardex.comprometidas)}
       </p>
+      {encargoNotice &&
+        <div role="status" style={{
+          margin: '12px 0 0', padding: 14, borderRadius: 10,
+          border: '1px solid var(--onoto-gold, #B7791F)',
+          background: 'rgba(183, 121, 31, 0.1)',
+          display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+        }}>
+          <span style={{ fontSize: 13.5 }}>
+            Tienes {encargoNotice.n} {encargoNotice.n === 1 ? 'encargo' : 'encargos'} ({encargoNotice.hallacas} hallacas) esperando; concrétalos desde Ventas.
+          </span>
+          <button className="btn btn--primary" style={{ minHeight: 44, padding: '5px 14px' }}
+            onClick={onViewStockExemptOrders}>
+            Ver encargos
+          </button>
+        </div>}
       {kardex.encargos_por_coordinar > 0 &&
         <div role="alert" style={{
           margin: '12px 0 0', padding: 14, borderRadius: 10,
@@ -673,7 +877,7 @@ function ProduccionTab({ onCatalogChange, onViewStockExemptOrders }) {
       </div>
 
       <div style={{ marginTop: 16 }}>
-        <BatchForm onCreated={() => { load(); onCatalogChange?.(); }} />
+        <BatchForm onCreated={() => { load(); onCatalogChange?.(); announceEncargos(); }} />
       </div>
 
       <div className="admin-table-wrap" style={{ marginTop: 16 }}>
