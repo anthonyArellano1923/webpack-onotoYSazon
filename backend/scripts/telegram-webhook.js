@@ -57,6 +57,7 @@ async function main() {
   });
   await call(token, 'setMyCommands', {
     commands: [
+      { command: 'nuevo', description: 'Registrar un pedido paso a paso' },
       { command: 'pedidos', description: 'Pedidos activos con su #ID' },
       { command: 'pendientes', description: 'Pedidos web por confirmar' },
       { command: 'stock', description: 'Stock disponible' },
@@ -65,7 +66,8 @@ async function main() {
       { command: 'porpagar', description: 'Volver a pendiente de pago: /porpagar <id>' },
       { command: 'entregado', description: 'Marcar entregado: /entregado <id>' },
       { command: 'rechazar', description: 'Rechazar pedido web: /rechazar <id>' },
-      { command: 'ayuda', description: 'Formato y comandos' },
+      { command: 'cancelar', description: 'Descartar el pedido en curso' },
+      { command: 'ayuda', description: 'Comandos' },
     ],
   });
   return undefined;
