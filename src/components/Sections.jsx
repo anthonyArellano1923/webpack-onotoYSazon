@@ -4,7 +4,7 @@ import useModalFocus from '../hooks/useModalFocus';
 import imgHeroMobile from '../assets/images/hero-mobile.webp';
 import imgHeroDesktop from '../assets/images/hero-desktop.webp';
 import imgTraditionBig from '../assets/images/tradition-big.jpeg';
-import imgTraditionHands from '../assets/images/tradition-hands.jpeg';
+import imgTraditionHands from '../assets/images/tradition-hands.webp';
 import imgTraditionMaking from '../assets/images/tradition-making.jpeg';
 import imgContactMobile from '../assets/images/contact-mobile.webp';
 import imgContactDesktop from '../assets/images/contact-desktop.webp';
