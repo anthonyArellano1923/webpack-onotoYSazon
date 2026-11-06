@@ -1,6 +1,7 @@
 const { db } = require('../database/db');
 const { getStock, getStockBreakdown } = require('./packs.controller');
 const { esFechaValida } = require('../utils/fecha');
+const { LIVE_ORDER_SQL } = require('../utils/orderState');
 
 /**
  * ADR-3 (plan 09): el stock es un dato propio que vive en `stock_movements`.
@@ -42,6 +43,8 @@ function getKardex(req, res) {
       _orden: m.created_at,
     }));
 
+    // PLAN-11: "vivas" = LIVE_ORDER_SQL; un pedido web vencido sale del kardex
+    // igual que sale del stock, para que el saldo final coincida con getStock().
     // Ventas vivas: entran al kardex como consumo (delta negativo) pero NO son
     // filas de stock_movements — son derivadas, y por eso no llevan papelera:
     // se editan desde la pestaña Ventas.
@@ -52,7 +55,7 @@ function getKardex(req, res) {
       SELECT id, customer_name, quantity_hallacas, status, delivered_at,
              date(created_at, 'localtime') AS fecha, created_at
       FROM orders
-      WHERE status != 'cancelado' AND quantity_hallacas > 0 AND stock_exempt = 0
+      WHERE ${LIVE_ORDER_SQL} AND quantity_hallacas > 0 AND stock_exempt = 0
     `).all().map((o) => ({
       tipo: 'venta',
       id: o.id,
@@ -89,7 +92,7 @@ function getKardex(req, res) {
     // muestran en una línea aparte del panel.
     const { encargos } = db.prepare(`
       SELECT COALESCE(SUM(quantity_hallacas), 0) AS encargos
-      FROM orders WHERE status != 'cancelado' AND stock_exempt = 1
+      FROM orders WHERE ${LIVE_ORDER_SQL} AND stock_exempt = 1
     `).get();
 
     return res.json({

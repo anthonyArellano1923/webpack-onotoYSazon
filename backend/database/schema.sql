@@ -98,6 +98,15 @@ CREATE TABLE IF NOT EXISTS orders (
   -- del stock. Se congela en el INSERT (no se deriva de order_items) para que
   -- ponerle precio al pack más adelante no cambie de bando las ventas viejas.
   stock_exempt      INTEGER NOT NULL DEFAULT 0 CHECK(stock_exempt IN (0, 1)),
+  -- PLAN-11 (ADR-4): revisión del pedido web. El estado (confirmado /
+  -- por_confirmar / vencido) se DERIVA de estas dos columnas, no se guarda.
+  -- Los índices de estas columnas se crean en migrate.js (addOrdersReviewColumns),
+  -- no acá: este archivo corre antes de las migraciones y en una BD existente
+  -- las columnas aún no existirían.
+  confirmed_at        TEXT,   -- NULL = aún no validado por el dueño (solo web)
+  expires_at          TEXT,   -- UTC; vence la reserva provisional del pedido web
+  reminder_sent_at    TEXT,   -- aviso "por vencer" ya enviado (idempotencia)
+  expired_notified_at TEXT,   -- aviso "vencido" ya enviado (idempotencia)
   created_at        TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );

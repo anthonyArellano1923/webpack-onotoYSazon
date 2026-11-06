@@ -34,6 +34,12 @@ const STATUS_MAP_SQL = `
     ELSE status
   END`;
 
+// PLAN-11: NO agregar acá las columnas nuevas. Este swap solo corre en BDs muy
+// viejas y SIEMPRE antes de addOrdersStockExemptColumn y addOrdersReviewColumns,
+// que las añaden después. Pero cualquier recreación FUTURA de `orders` debe
+// incluir stock_exempt, confirmed_at, expires_at, reminder_sent_at y
+// expired_notified_at, Y copiarlas en el INSERT explícito: si no, el backfill
+// confirmaría de golpe todos los pedidos web pendientes (ADR-4 §6).
 const ORDERS_FINAL_SQL = `
   CREATE TABLE orders_new (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,11 +81,20 @@ function tableSql(db, table) {
   return row?.sql || '';
 }
 
-/** Ejecuta un swap de tabla con FKs apagadas y en transacción. */
+/**
+ * Runs a table swap with foreign keys disabled, inside a transaction.
+ * PLAN-11: try/finally para que foreign_keys vuelva a ON aunque el swap
+ * lance; antes, un fallo dejaba la conexión sin integridad referencial.
+ * @param {import('better-sqlite3').Database} db
+ * @param {Function} fn - Swap body, run inside db.transaction.
+ */
 function withTableSwap(db, fn) {
   db.pragma('foreign_keys = OFF');
-  db.transaction(fn)();
-  db.pragma('foreign_keys = ON');
+  try {
+    db.transaction(fn)();
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
 }
 
 /* ---- orders: versión más vieja (user_id NOT NULL, sin customer_name) ---- */
@@ -277,6 +292,54 @@ function migrateOrdersFinalStatusEnum(db) {
   console.log('✓ orders.status migrado (entregado/pendiente_entrega retirados).');
 }
 
+/* ---- orders: revisión de pedidos web (PLAN-11, ADR-4) ---- */
+const REVIEW_COLUMNS = [
+  ['confirmed_at', 'TEXT'],
+  ['expires_at', 'TEXT'],
+  ['reminder_sent_at', 'TEXT'],
+  ['expired_notified_at', 'TEXT'],
+];
+
+/**
+ * Adds the review columns (confirmed_at, expires_at, reminder_sent_at,
+ * expired_notified_at), backfills legacy orders as confirmed and creates the
+ * PLAN-11 indexes. Idempotent; the backfill runs on every startup.
+ * @param {import('better-sqlite3').Database} db
+ */
+function addOrdersReviewColumns(db) {
+  const existing = new Set(tableColumns(db, 'orders').map((c) => c.name));
+  for (const [name, type] of REVIEW_COLUMNS) {
+    if (existing.has(name)) continue;
+    console.log(`→ Agregando columna orders.${name} (PLAN-11)...`);
+    db.exec(`ALTER TABLE orders ADD COLUMN ${name} ${type}`);
+  }
+
+  // PLAN-11 — INVARIANTE DEL BACKFILL: ningún INSERT de orders deja
+  // confirmed_at Y expires_at ambos en NULL. createOrder (web) siempre fija
+  // expires_at y createManualSale (admin) siempre fija confirmed_at. Por eso
+  // solo una fila anterior a este cambio puede tener ambas en NULL: ya
+  // reservaba stock y debe quedar confirmada. Corre en CADA arranque (no
+  // condicionado a "columna recién creada", que es frágil si otra migración
+  // recrea la tabla). NO usar `WHERE confirmed_at IS NULL` a secas: confirmaría
+  // los pedidos web pendientes y anularía la reserva provisional.
+  db.transaction(() => {
+    const { changes } = db.prepare(`
+      UPDATE orders SET confirmed_at = created_at
+      WHERE confirmed_at IS NULL AND expires_at IS NULL
+    `).run();
+    if (changes > 0) console.log(`✓ ${changes} pedido(s) legado(s) marcados como confirmados.`);
+  })();
+
+  // PLAN-11: los índices van acá y NO en schema.sql. db.js ejecuta schema.sql
+  // antes de las migraciones; en una BD existente las columnas nuevas aún no
+  // existen en ese momento y el CREATE INDEX haría caer el arranque.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_orders_phone  ON orders(customer_phone);
+    CREATE INDEX IF NOT EXISTS idx_orders_review ON orders(confirmed_at, expires_at);
+    CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
+  `);
+}
+
 /* ---- users: login por teléfono (phone UNIQUE, email opcional, address) ---- */
 function migrateUsersTable(db) {
   const cols = tableColumns(db, 'users');
@@ -394,8 +457,11 @@ function runMigrations(db) {
   // Después del swap final (que recrea orders sin esta columna): puramente
   // aditiva e independiente del enum de status.
   addOrdersStockExemptColumn(db);
+  // PLAN-11: al final de las migraciones de orders, después de todo swap, para
+  // que ninguna recreación de la tabla borre las columnas nuevas.
+  addOrdersReviewColumns(db);
   seedSettings(db);
   seedPacks(db);
 }
 
-module.exports = { runMigrations };
+module.exports = { runMigrations, withTableSwap, addOrdersReviewColumns };
