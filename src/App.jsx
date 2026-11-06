@@ -79,14 +79,14 @@ function useActiveSection() {
 
 /* ---- App ---- */
 export default function App() {
-  const TWEAK_DEFAULTS = { blur: 28, darkMode: false };
+  const TWEAK_DEFAULTS = { blur: 28 };
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [theme, toggleTheme, setTheme] = useTheme();
 
-  useEffect(() => { setTheme(tweaks.darkMode ? 'dark' : 'light'); }, [tweaks.darkMode]);
+  // El tema (guardado o prefers-color-scheme) lo resuelve useTheme; ya no se pisa al cargar.
   useEffect(() => { document.documentElement.style.setProperty('--glass-blur', `${tweaks.blur}px`); }, [tweaks.blur]);
 
-  const handleToggleTheme = () => { setTweak('darkMode', theme !== 'dark'); };
+  const handleToggleTheme = toggleTheme;
 
   /* Packs: la BD es la fuente de verdad (precios y disponibilidad editables
      desde el admin). packs.js queda como fallback visual si la API no
@@ -329,8 +329,8 @@ export default function App() {
                        min={0} max={48} step={2} onChange={(v) => setTweak('blur', v)} suffix="px" />
         </TweakSection>
         <TweakSection label="Apariencia">
-          <TweakToggle label="Modo oscuro" checked={tweaks.darkMode}
-                       onChange={(v) => setTweak('darkMode', v)} />
+          <TweakToggle label="Modo oscuro" checked={theme === 'dark'}
+                       onChange={(v) => setTheme(v ? 'dark' : 'light')} />
         </TweakSection>
       </TweaksPanel>
     </div>
