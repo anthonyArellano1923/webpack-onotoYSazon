@@ -1695,3 +1695,12 @@ a { color: inherit; text-decoration: none; }
   .auth-modal__error .btn { min-height: 44px !important; padding: 8px 14px !important; }
   .nav__brand, .social-pill { min-height: 44px; display: inline-flex; align-items: center; }
 }
+
+/* Barra superior a 375 px con sesión de admin (Panel + nombre + carrito):
+   compacta marca y acciones para que no desborde la píldora. */
+@media (max-width: 420px) {
+  .nav { padding-left: 12px; gap: 6px; }
+  .nav__brand { font-size: 15px; gap: 6px; }
+  .nav__brand-mark { width: 22px; height: 22px; }
+  .nav__actions { gap: 4px; }
+}
