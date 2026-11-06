@@ -249,6 +249,26 @@ function VentasTab({ onCatalogChange, onPendingChange, showStockExemptOnly, onCl
     }
   }
 
+  // STOCK FASE 2 (A3): cancelar un pedido ya entregado exige decir si las
+  // hallacas vuelven al stock (devolución) o se pierden (merma). Devuelve null
+  // si el admin se arrepiente.
+  function askCancelMode(o) {
+    const nombre = o.customer.name || 'cliente sin nombre';
+    if (window.confirm(`El pedido de ${nombre} ya fue entregado (${o.quantity_hallacas} hallacas).\n\n¿Las hallacas VUELVEN al stock?\nAceptar = devolución.`)) return 'devolucion';
+    if (window.confirm(`¿Registrar las ${o.quantity_hallacas} hallacas como MERMA (no vuelven al stock)?\nCancelar = no cancelar el pedido.`)) return 'merma';
+    return null;
+  }
+
+  async function changeStatus(o, status) {
+    if (status === 'cancelado' && o.status !== 'cancelado' && o.delivered_at) {
+      const cancelMode = askCancelMode(o);
+      if (!cancelMode) { load(); return; } // restaura el select
+      await patchOrder(o.id, { status, cancelMode });
+      return;
+    }
+    await patchOrder(o.id, { status });
+  }
+
   async function removeOrder(o) {
     // QA-12: borrado físico de una venta (errores/pruebas del admin).
     if (!window.confirm(`¿Borrar definitivamente la venta de ${o.customer.name || 'cliente sin nombre'} (${o.quantity_hallacas} hallacas)? Esta acción no se puede deshacer.`)) return;
@@ -398,7 +418,7 @@ function VentasTab({ onCatalogChange, onPendingChange, showStockExemptOnly, onCl
                 </td>
                 <td>
                   <select className="form-input" value={o.status}
-                    onChange={(e) => patchOrder(o.id, { status: e.target.value })}>
+                    onChange={(e) => changeStatus(o, e.target.value)}>
                     {Object.entries(STATUS_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                   </select>
                 </td>
@@ -834,6 +854,7 @@ function ProduccionTab({ onCatalogChange, onViewStockExemptOrders }) {
               const etiqueta = m.kind === 'venta'
                 ? (m.delivered_at ? 'Pedido entregado' : (m.status === 'pendiente_pago' ? 'Pedido reservado' : 'Venta'))
                 : m.kind === 'tanda' ? 'Tanda'
+                : m.kind === 'merma' ? 'Merma'
                 : (m.delta > 0 ? 'Ingreso' : 'Egreso');
               return (
                 <tr key={`${m.kind || 'venta'}-${m.id}`}>

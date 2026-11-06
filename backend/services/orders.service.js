@@ -30,6 +30,9 @@ const MAX_HALLACAS = 10000;
 // ser su propia columna (delivered_at), no un estado de pago.
 const VALID_STATUSES = ['pagado', 'pendiente_pago', 'cortesia', 'cancelado'];
 const VALID_PAYMENT_METHODS = ['cuenta_vista', 'efectivo'];
+// STOCK FASE 2 (A3): al cancelar un pedido YA ENTREGADO el dueño decide si las
+// hallacas vuelven al stock (devolución) o se pierden (merma).
+const CANCEL_MODES = ['devolucion', 'merma'];
 
 /**
  * PLAN-11 (D10): 409 cuando una operación del panel aumenta la reserva sin
@@ -200,10 +203,13 @@ function createSale(input, opts = {}) {
 function updateSale(id, input, opts = {}) {
   const {
     status, paymentMethod, totalClp, quantityHallacas, notes, customerName,
-    delivered, confirmStock, confirm, force,
+    delivered, confirmStock, confirm, force, cancelMode,
   } = input || {};
 
   // ---- Validación del body (sin tocar la BD) ----
+  if (cancelMode !== undefined && !CANCEL_MODES.includes(cancelMode)) {
+    throw httpError(400, `cancelMode inválido. Opciones: ${CANCEL_MODES.join(', ')}`);
+  }
   if (confirmStock !== undefined && confirmStock !== true) {
     throw httpError(400, 'confirmStock sólo admite el valor true para concretar un encargo.');
   }
@@ -264,6 +270,35 @@ function updateSale(id, input, opts = {}) {
     // escribe su reverso con la fecha del vencimiento; así la confirmación
     // tardía queda como una reactivación con la fecha de hoy.
     catchUpOrder(id);
+
+    // STOCK FASE 2 (A3): cancelar algo que ya se entregó exige decir qué pasó
+    // con las hallacas. Si no, el stock subiría solo, como si hubieran vuelto.
+    const cancelling = status === 'cancelado' && order.status !== 'cancelado';
+    const deliveredFinal = delivered !== undefined ? delivered : order.delivered_at !== null;
+    if (cancelling && deliveredFinal && cancelMode === undefined) {
+      throw httpError(
+        400,
+        'El pedido ya fue entregado: indica si las hallacas vuelven al stock (devolucion) o se pierden (merma).',
+        'MODO_CANCELACION_REQUERIDO'
+      );
+    }
+    if (cancelMode !== undefined && !(cancelling && deliveredFinal)) {
+      throw httpError(400, 'cancelMode solo aplica al cancelar un pedido entregado.');
+    }
+    // Un pedido cancelado como merma ya descontó sus hallacas como pérdida:
+    // reactivarlo las descontaría otra vez. Se registra una venta nueva.
+    if (order.status === 'cancelado' && status !== undefined && status !== 'cancelado') {
+      const { merma } = db.prepare(`
+        SELECT COALESCE(SUM(delta), 0) AS merma FROM stock_movements WHERE order_id = ? AND kind = 'merma'
+      `).get(id);
+      if (merma !== 0) {
+        throw httpError(
+          409,
+          'Este pedido se canceló como merma: sus hallacas ya se descontaron. Registra una venta nueva en vez de reactivarlo.',
+          'CANCELADO_COMO_MERMA'
+        );
+      }
+    }
 
     if (confirmingStock && order.stock_exempt !== 1) {
       throw httpError(409, 'Este pedido ya reserva stock o no corresponde a un encargo.');
@@ -352,8 +387,18 @@ function updateSale(id, input, opts = {}) {
     // STOCK FASE 2: asiento de lo que cambió la reserva (cancelar, reactivar,
     // confirmar un vencido, cambiar la cantidad, concretar un encargo), y los
     // eventos que se desprenden de comparar antes y después.
-    syncOrderLedger(id);
-    recordTransitions(order, readForUpdate.get(id), opts.actor || 'admin');
+    const released = syncOrderLedger(id);
+    // A3, merma: el reverso devolvió la reserva al cálculo del stock; el
+    // asiento de merma (que SÍ cuenta) la vuelve a sacar como pérdida real.
+    if (cancelling && cancelMode === 'merma' && released && released.delta > 0) {
+      db.prepare(`
+        INSERT INTO stock_movements (delta, reason, kind, order_id)
+        VALUES (?, ?, 'merma', ?)
+      `).run(-released.delta, `Merma del pedido #${id} (cancelado tras la entrega)`, id);
+    }
+    recordTransitions(order, readForUpdate.get(id), opts.actor || 'admin', {
+      cancelDetail: cancelling && cancelMode ? cancelMode : null,
+    });
     return { finalQty, finalTotal };
   });
 
@@ -362,5 +407,5 @@ function updateSale(id, input, opts = {}) {
 }
 
 module.exports = {
-  MAX_HALLACAS, VALID_STATUSES, VALID_PAYMENT_METHODS, stockInsuficiente, createSale, updateSale,
+  MAX_HALLACAS, VALID_STATUSES, VALID_PAYMENT_METHODS, CANCEL_MODES, stockInsuficiente, createSale, updateSale,
 };

@@ -214,6 +214,16 @@ test('B3: Rechazar cancela un pedido por confirmar y libera el stock', async () 
   assert.deepEqual(ev.map((e) => [e.event, e.actor]), [['creado', 'sistema'], ['rechazado', 'telegram']]);
 });
 
+test('B3b: Rechazar sobre un pedido entregado no lo cancela (A3 es decisión del panel)', async () => {
+  h.addStock(10);
+  const id = await webOrder({ hallacas: 4 });
+  h.patch(id, { confirm: true, delivered: true });
+  await postWebhook(press(`x:${id}`));
+  assert.equal(h.getOrder(id).status, 'pendiente_pago');
+  assert.equal(h.getStock(), 6);
+  assert.match(sent('editMessageText').at(-1).body.text, /usa el panel/);
+});
+
 test('B4: STOCK_INSUFICIENTE al confirmar un vencido → pregunta y reenvía con force', async () => {
   h.addStock(5);
   const id = await webOrder({ hallacas: 4 });
