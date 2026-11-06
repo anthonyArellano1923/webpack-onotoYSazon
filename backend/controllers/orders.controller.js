@@ -6,6 +6,7 @@ const { LIVE_ORDER_SQL, holdHours, maxPorTelefono, reviewState } = require('../u
 const { CONTACT_SELLER_MSG, httpError, sendError } = require('../utils/httpError');
 const notify = require('../services/notify');
 const { syncOrderLedger } = require('../services/ledger');
+const { recordEvent } = require('../services/orderEvents');
 
 function createOrder(req, res) {
   const { name, phone, items, delivery, address, dateHint, notes, quantityHallacas } = req.body;
@@ -160,8 +161,10 @@ function createOrder(req, res) {
       insertItem.run(orderId, item.packId, item.packName, item.qty, item.priceAtTime ?? null);
     }
 
-    // STOCK FASE 2: asiento de la reserva en el mismo commit que el pedido.
+    // STOCK FASE 2: asiento de la reserva y evento "creado" en el mismo commit
+    // que el pedido. El checkout lo hace el cliente: actor sistema.
     syncOrderLedger(orderId);
+    recordEvent(orderId, 'creado', 'sistema');
 
     return orderId;
   });

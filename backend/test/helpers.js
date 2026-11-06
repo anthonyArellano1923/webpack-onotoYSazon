@@ -42,6 +42,7 @@ function mockRes() {
 /** Deletes all business rows (packs and settings are kept). */
 function resetDb() {
   db.exec(`
+    DELETE FROM order_events;
     DELETE FROM order_items;
     DELETE FROM orders;
     DELETE FROM stock_movements;

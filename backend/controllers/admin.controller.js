@@ -8,7 +8,8 @@ const { isMontoClp, MONTO_RANGE_MSG } = require('../utils/limits');
 const {
   createSale, updateSale,
 } = require('../services/orders.service');
-const { syncOrderLedger } = require('../services/ledger');
+const { syncOrderLedger, catchUpOrder } = require('../services/ledger');
+const { listEvents } = require('../services/orderEvents');
 
 // PLAN-12: vocabulario y topes viven en services/orders.service.js.
 
@@ -137,11 +138,24 @@ function deleteOrder(req, res) {
   // STOCK FASE 2: el ledger registra que la reserva se liberó antes de que la
   // fila desaparezca (primero se pone al día un vencimiento pendiente).
   db.transaction(() => {
-    syncOrderLedger(id);
+    catchUpOrder(id);
     syncOrderLedger(id, { target: 0, reason: `Eliminación del pedido #${id}` });
     db.prepare('DELETE FROM orders WHERE id = ?').run(id);
   }).immediate();
   return res.json({ message: 'Venta eliminada' });
+}
+
+/**
+ * STOCK FASE 2: bitácora de estados de un pedido (GET /admin/orders/:id/events),
+ * más antigua primero. `occurred_at` en UTC ("YYYY-MM-DD HH:MM:SS").
+ */
+function getOrderEvents(req, res) {
+  const id = parsePositiveId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Id de pedido inválido.' });
+  if (!db.prepare('SELECT 1 FROM orders WHERE id = ?').get(id)) {
+    return res.status(404).json({ error: 'Pedido no encontrado.' });
+  }
+  return res.json({ events: listEvents(id) });
 }
 
 /**
@@ -388,6 +402,7 @@ module.exports = {
   createManualSale,
   updateOrder,
   deleteOrder,
+  getOrderEvents,
   getAllUsers,
   deleteUser,
   getPacks,

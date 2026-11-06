@@ -433,6 +433,60 @@ function migrateStockMovementsLedger(db) {
   `);
 }
 
+/* ---- order_events: bitácora de estados (STOCK FASE 2) ---- */
+
+/**
+ * Creates order_events (if missing) and gives every order without events the
+ * history its columns can prove: creado, confirmado (web), entregado and
+ * cancelado/rechazado (dated on updated_at, the best date available; marked
+ * 'histórico'). Orders that already have events are skipped, so it is
+ * idempotent and safe on every startup.
+ * @param {import('better-sqlite3').Database} db
+ */
+function createOrderEventsTable(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS order_events (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id    INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      event       TEXT    NOT NULL CHECK(event IN (
+                    'creado','confirmado','rechazado','expirado','reactivado',
+                    'pagado','entregado','cancelado','eliminado')),
+      actor       TEXT    NOT NULL CHECK(actor IN ('admin','telegram','sistema')),
+      detail      TEXT,
+      occurred_at TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_order_events_order ON order_events(order_id, occurred_at);
+  `);
+  const sinEventos = "NOT EXISTS (SELECT 1 FROM order_events e WHERE e.order_id = o.id)";
+  db.transaction(() => {
+    // Una sola foto de "qué pedidos no tienen historia": se toma antes de
+    // insertar el primer evento, si no los INSERT siguientes no los verían.
+    db.exec(`CREATE TEMP TABLE IF NOT EXISTS _sin_eventos (id INTEGER PRIMARY KEY); DELETE FROM _sin_eventos;`);
+    db.exec(`INSERT INTO _sin_eventos SELECT o.id FROM orders o WHERE ${sinEventos}`);
+    const n = db.prepare('SELECT COUNT(*) AS n FROM _sin_eventos').get().n;
+    if (n === 0) return;
+    db.exec(`
+      INSERT INTO order_events (order_id, event, actor, detail, occurred_at)
+      SELECT id, 'creado', CASE WHEN source = 'admin' THEN 'admin' ELSE 'sistema' END, 'histórico', created_at
+      FROM orders WHERE id IN (SELECT id FROM _sin_eventos);
+
+      INSERT INTO order_events (order_id, event, actor, detail, occurred_at)
+      SELECT id, 'confirmado', 'admin', 'histórico', confirmed_at
+      FROM orders WHERE id IN (SELECT id FROM _sin_eventos) AND source = 'web' AND confirmed_at IS NOT NULL;
+
+      INSERT INTO order_events (order_id, event, actor, detail, occurred_at)
+      SELECT id, 'entregado', 'admin', 'histórico', delivered_at
+      FROM orders WHERE id IN (SELECT id FROM _sin_eventos) AND delivered_at IS NOT NULL;
+
+      INSERT INTO order_events (order_id, event, actor, detail, occurred_at)
+      SELECT id, CASE WHEN confirmed_at IS NULL THEN 'rechazado' ELSE 'cancelado' END, 'admin', 'histórico', updated_at
+      FROM orders WHERE id IN (SELECT id FROM _sin_eventos) AND status = 'cancelado';
+    `);
+    console.log(`✓ Bitácora inicial para ${n} pedido(s).`);
+  })();
+  db.exec('DROP TABLE IF EXISTS _sin_eventos');
+}
+
 /* ---- users: login por teléfono (phone UNIQUE, email opcional, address) ---- */
 function migrateUsersTable(db) {
   const cols = tableColumns(db, 'users');
@@ -556,6 +610,7 @@ function runMigrations(db) {
   // STOCK FASE 2: después de las columnas de revisión, porque el backfill del
   // ledger usa LIVE_ORDER_SQL (confirmed_at, expires_at).
   migrateStockMovementsLedger(db);
+  createOrderEventsTable(db);
   seedSettings(db);
   seedPacks(db);
 }

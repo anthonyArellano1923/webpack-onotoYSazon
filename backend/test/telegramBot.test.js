@@ -209,6 +209,9 @@ test('B3: Rechazar cancela un pedido por confirmar y libera el stock', async () 
   await postWebhook(press(`x:${id}`));
   assert.equal(h.getOrder(id).status, 'cancelado');
   assert.equal(h.getStock(), 10);
+  // STOCK FASE 2: el rechazo queda en la bitácora firmado por el bot.
+  const ev = h.db.prepare('SELECT event, actor FROM order_events WHERE order_id = ? ORDER BY id').all(id);
+  assert.deepEqual(ev.map((e) => [e.event, e.actor]), [['creado', 'sistema'], ['rechazado', 'telegram']]);
 });
 
 test('B4: STOCK_INSUFICIENTE al confirmar un vencido → pregunta y reenvía con force', async () => {
@@ -292,6 +295,9 @@ test('N1: /nuevo paso a paso → resumen → Confirmar registra una venta admin 
   assert.notEqual(o.confirmed_at, null);
   assert.equal(o.stock_exempt, 0);
   assert.equal(h.getStock(), 18);
+  // STOCK FASE 2: la venta del bot queda creada por telegram.
+  assert.deepEqual(h.db.prepare('SELECT event, actor FROM order_events WHERE order_id = ?').all(o.id),
+    [{ event: 'creado', actor: 'telegram' }]);
   // El resultado ofrece los botones que siguen teniendo sentido.
   assert.deepEqual(buttons(sent('editMessageText').at(-1)), [`p:${o.id}`, `e:${o.id}`]);
 

@@ -18,7 +18,8 @@ const { getCurrentBatchId } = require('../controllers/batches.controller');
 const { LIVE_ORDER_SQL } = require('../utils/orderState');
 const { httpError } = require('../utils/httpError');
 const { isMontoClp, MONTO_RANGE_MSG } = require('../utils/limits');
-const { syncOrderLedger } = require('./ledger');
+const { syncOrderLedger, catchUpOrder } = require('./ledger');
+const { recordEvent, recordTransitions } = require('./orderEvents');
 
 // Tope de rango de una venta, alineado con R-5 (checkout), MAX_DELTA
 // (movimientos de stock) y MAX_CANTIDAD (tandas).
@@ -61,10 +62,12 @@ function stockInsuficiente(stock, requerido) {
  *   `force: true` (el dueño "registra la realidad" a sabiendas).
  *
  * @param {object} input - Same fields as the POST /admin/orders body.
+ * @param {{actor?: 'admin'|'telegram'}} [opts] - STOCK FASE 2: who registers
+ *   it, for order_events (default admin).
  * @returns {{id: number, esEncargo: boolean}}
  * @throws {Error} httpError 400 (invalid input), 409 STOCK_INSUFICIENTE, SQLite errors.
  */
-function createSale(input) {
+function createSale(input, opts = {}) {
   const {
     customerName, customerPhone, quantityHallacas, totalClp, paymentMethod, status, notes, delivery,
     encargo, force,
@@ -163,6 +166,9 @@ function createSale(input) {
     // STOCK FASE 2: asiento de la venta en el mismo commit (un encargo no
     // reserva, así que no escribe nada hasta concretarse).
     syncOrderLedger(id);
+    const actor = opts.actor || 'admin';
+    recordEvent(id, 'creado', actor);
+    if (saleStatus === 'pagado') recordEvent(id, 'pagado', actor);
     return id;
   });
 
@@ -186,7 +192,8 @@ function createSale(input) {
  *
  * @param {number} id - Order id (already validated as a positive integer).
  * @param {object} input - Same fields as the PATCH /admin/orders/:id body.
- * @param {{precondition?: (order: object) => void}} [opts]
+ * @param {{precondition?: (order: object) => void, actor?: 'admin'|'telegram'}} [opts]
+ *   STOCK FASE 2: `actor` firma los eventos del pedido (default admin).
  * @returns {{finalQty: number, finalTotal: number|null, confirmingStock: boolean}}
  * @throws {Error} httpError 400/404/409 (incl. STOCK_INSUFICIENTE, PEDIDO_NO_CONFIRMADO).
  */
@@ -235,15 +242,18 @@ function updateSale(id, input, opts = {}) {
 
   const confirmingStock = confirmStock === true;
 
+  // Releída antes y después del UPDATE: la comparación decide los eventos.
+  const readForUpdate = db.prepare(`
+    SELECT id, status, total_clp, quantity_hallacas, stock_exempt, confirmed_at, expires_at,
+           delivered_at, customer_name, source,
+           (${LIVE_ORDER_SQL}) AS live,
+           COALESCE(expires_at > datetime('now'), 0) AS hold_open
+    FROM orders WHERE id = ?
+  `);
+
   const applyUpdate = db.transaction(() => {
     // Releído DENTRO del lock: el estado que decide la reserva es el actual.
-    const order = db.prepare(`
-      SELECT id, status, total_clp, quantity_hallacas, stock_exempt, confirmed_at, expires_at,
-             delivered_at, customer_name, source,
-             (${LIVE_ORDER_SQL}) AS live,
-             COALESCE(expires_at > datetime('now'), 0) AS hold_open
-      FROM orders WHERE id = ?
-    `).get(id);
+    const order = readForUpdate.get(id);
     if (!order) throw httpError(404, 'Pedido no encontrado.');
 
     // PLAN-12: guardia del llamador sobre el estado actual, bajo el lock.
@@ -253,7 +263,7 @@ function updateSale(id, input, opts = {}) {
     // estado ACTUAL. Si la reserva venció sin que nadie lo anotara, acá se
     // escribe su reverso con la fecha del vencimiento; así la confirmación
     // tardía queda como una reactivación con la fecha de hoy.
-    syncOrderLedger(id);
+    catchUpOrder(id);
 
     if (confirmingStock && order.stock_exempt !== 1) {
       throw httpError(409, 'Este pedido ya reserva stock o no corresponde a un encargo.');
@@ -340,8 +350,10 @@ function updateSale(id, input, opts = {}) {
 
     db.prepare(`UPDATE orders SET ${updates.join(', ')} WHERE id = ?`).run(...values, id);
     // STOCK FASE 2: asiento de lo que cambió la reserva (cancelar, reactivar,
-    // confirmar un vencido, cambiar la cantidad, concretar un encargo).
+    // confirmar un vencido, cambiar la cantidad, concretar un encargo), y los
+    // eventos que se desprenden de comparar antes y después.
     syncOrderLedger(id);
+    recordTransitions(order, readForUpdate.get(id), opts.actor || 'admin');
     return { finalQty, finalTotal };
   });
 

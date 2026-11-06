@@ -235,7 +235,7 @@ function buttonsFor(o) {
 function runAction(action, id, force = false) {
   const def = ACTIONS[action];
   try {
-    updateSale(id, { ...def.input, ...(force ? { force: true } : {}) }, { precondition: def.guard });
+    updateSale(id, { ...def.input, ...(force ? { force: true } : {}) }, { precondition: def.guard, actor: 'telegram' });
     const o = getOrderRow(id);
     return {
       ok: true,
@@ -330,7 +330,7 @@ function takeDraft(token, chatId) {
  */
 function registerSale(chatId, input) {
   try {
-    const { id } = createSale(input);
+    const { id } = createSale(input, { actor: 'telegram' });
     const o = getOrderRow(id);
     return { text: `✅ Registrado: ${formatOrder(o)}`, markup: buttonsFor(o) };
   } catch (err) {

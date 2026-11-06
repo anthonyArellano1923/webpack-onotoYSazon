@@ -147,6 +147,21 @@ CREATE TABLE IF NOT EXISTS stock_movements (
 );
 CREATE INDEX IF NOT EXISTS idx_stock_movements_fecha ON stock_movements(occurred_at DESC, id DESC);
 
+-- STOCK FASE 2: bitácora de estados del pedido (quién y cuándo). occurred_at
+-- en UTC, igual que orders.created_at. actor: admin (panel), telegram (bot),
+-- sistema (checkout web, vencimiento, migración).
+CREATE TABLE IF NOT EXISTS order_events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id    INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  event       TEXT    NOT NULL CHECK(event IN (
+                'creado','confirmado','rechazado','expirado','reactivado',
+                'pagado','entregado','cancelado','eliminado')),
+  actor       TEXT    NOT NULL CHECK(actor IN ('admin','telegram','sistema')),
+  detail      TEXT,
+  occurred_at TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_order_events_order ON order_events(order_id, occurred_at);
+
 CREATE TRIGGER IF NOT EXISTS orders_updated_at
   AFTER UPDATE ON orders
 BEGIN

@@ -1,6 +1,6 @@
 const { Router } = require('express');
 const {
-  getAllOrders, createManualSale, updateOrder, deleteOrder,
+  getAllOrders, createManualSale, updateOrder, deleteOrder, getOrderEvents,
   getAllUsers, deleteUser, getPacks, updatePack,
   getSettings, updateSettings, getReports,
 } = require('../controllers/admin.controller');
@@ -27,6 +27,8 @@ router.patch('/orders/:id', updateOrder);
 // QA-12: borrado físico de ventas (errores/pruebas); 'cancelado' sigue
 // existiendo para pedidos reales que no se concretan (historial).
 router.delete('/orders/:id', deleteOrder);
+// STOCK FASE 2: bitácora de estados del pedido (quién y cuándo).
+router.get('/orders/:id/events', getOrderEvents);
 
 // Usuarios
 router.get('/users', getAllUsers);

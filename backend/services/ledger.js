@@ -21,6 +21,7 @@
  */
 const { db } = require('../database/db');
 const { LIVE_ORDER_SQL, EXPIRED_REVIEW_SQL, ORDER_LEDGER_SQL } = require('../utils/orderState');
+const { recordEvent } = require('./orderEvents');
 
 /**
  * Net of the shadow rows of an order (= −reservation recorded in the ledger).
@@ -117,18 +118,40 @@ function syncOrderLedger(orderId, ctx = {}) {
 }
 
 /**
- * Writes the pending releases of every web hold that expired unnoticed.
- * Idempotent: an order already reconciled gets nothing.
- * @returns {number} Orders that received a release row.
+ * Puts one order's history up to date BEFORE anything changes it: if its web
+ * hold expired unnoticed, records the 'expirado' event (actor sistema, at the
+ * expiry instant) and the ledger release. Idempotent.
+ * @param {number} orderId
+ * @returns {boolean} Whether something was written.
+ */
+function catchUpOrder(orderId) {
+  const o = db.prepare(`
+    SELECT id, expires_at, (${EXPIRED_REVIEW_SQL}) AS expired,
+           EXISTS (SELECT 1 FROM order_events WHERE order_id = orders.id AND event = 'expirado') AS noted
+    FROM orders WHERE id = ?
+  `).get(orderId);
+  if (!o) return false;
+  let wrote = false;
+  if (o.expired && !o.noted) {
+    recordEvent(o.id, 'expirado', 'sistema', { at: o.expires_at });
+    wrote = true;
+  }
+  return syncOrderLedger(orderId) !== null || wrote;
+}
+
+/**
+ * Writes the pending 'expirado' events and releases of every web hold that
+ * expired unnoticed. Idempotent: an order already up to date gets nothing.
+ * @returns {number} Orders that received something.
  */
 function materializeExpirations() {
   const run = db.transaction(() => {
     const ids = db.prepare(`SELECT id FROM orders WHERE ${EXPIRED_REVIEW_SQL}`).all();
     let n = 0;
-    for (const { id } of ids) if (syncOrderLedger(id)) n += 1;
+    for (const { id } of ids) if (catchUpOrder(id)) n += 1;
     return n;
   });
   return run.immediate();
 }
 
-module.exports = { syncOrderLedger, materializeExpirations, orderLedgerNet };
+module.exports = { syncOrderLedger, catchUpOrder, materializeExpirations, orderLedgerNet };
