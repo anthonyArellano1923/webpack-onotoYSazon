@@ -4,6 +4,7 @@ const {
   LIVE_ORDER_SQL, PENDING_REVIEW_SQL, EXPIRED_REVIEW_SQL, reviewState,
 } = require('../utils/orderState');
 const { sendError, parsePositiveId } = require('../utils/httpError');
+const { isMontoClp, MONTO_RANGE_MSG } = require('../utils/limits');
 const {
   createSale, updateSale,
 } = require('../services/orders.service');
@@ -194,13 +195,17 @@ function updatePack(req, res) {
   const { priceClp, isAvailable } = req.body;
 
   if (priceClp !== undefined) {
-    if (priceClp !== null && (!Number.isInteger(priceClp) || priceClp < 0)) {
-      return res.status(400).json({ error: 'Precio inválido (entero ≥ 0, o null para "por encargo").' });
+    if (priceClp !== null && !isMontoClp(priceClp)) {
+      return res.status(400).json({ error: `Precio inválido (${MONTO_RANGE_MSG}, o null para "por encargo").` });
     }
     updates.push('price_clp = ?');
     values.push(priceClp);
   }
   if (isAvailable !== undefined) {
+    // PLAN-13: booleano estricto; antes "false" (texto) quedaba como disponible.
+    if (typeof isAvailable !== 'boolean') {
+      return res.status(400).json({ error: 'isAvailable debe ser true o false.' });
+    }
     updates.push('is_available = ?');
     values.push(isAvailable ? 1 : 0);
   }
@@ -227,8 +232,8 @@ function updateSettings(req, res) {
   if (price_per_hallaca === undefined) {
     return res.status(400).json({ error: 'Nada que actualizar.' });
   }
-  if (!Number.isInteger(price_per_hallaca) || price_per_hallaca < 0) {
-    return res.status(400).json({ error: 'price_per_hallaca debe ser un entero ≥ 0.' });
+  if (!isMontoClp(price_per_hallaca)) {
+    return res.status(400).json({ error: `price_per_hallaca debe ser un ${MONTO_RANGE_MSG}.` });
   }
 
   db.prepare('UPDATE settings SET price_per_hallaca = ? WHERE id = 1').run(price_per_hallaca);

@@ -17,6 +17,7 @@ const { getStock } = require('../controllers/packs.controller');
 const { getCurrentBatchId } = require('../controllers/batches.controller');
 const { LIVE_ORDER_SQL } = require('../utils/orderState');
 const { httpError } = require('../utils/httpError');
+const { isMontoClp, MONTO_RANGE_MSG } = require('../utils/limits');
 
 // Tope de rango de una venta, alineado con R-5 (checkout), MAX_DELTA
 // (movimientos de stock) y MAX_CANTIDAD (tandas).
@@ -72,7 +73,10 @@ function createSale(input) {
   if (typeof customerName !== 'string' || !customerName.trim()) {
     throw httpError(400, 'Cliente y cantidad de hallacas (entero > 0) son requeridos.');
   }
-  const qty = Number(quantityHallacas);
+  // PLAN-13: solo número o texto de dígitos; Number() aceptaba true, [7], etc.
+  const qtyIsNumeric = typeof quantityHallacas === 'number'
+    || (typeof quantityHallacas === 'string' && /^\d+$/.test(quantityHallacas.trim()));
+  const qty = qtyIsNumeric ? Number(quantityHallacas) : NaN;
   if (!Number.isInteger(qty) || qty <= 0) {
     throw httpError(400, 'Cliente y cantidad de hallacas (entero > 0) son requeridos.');
   }
@@ -89,6 +93,21 @@ function createSale(input) {
   }
   if (force !== undefined && typeof force !== 'boolean') {
     throw httpError(400, 'force debe ser true o false.');
+  }
+  // PLAN-13: tipos estrictos; un objeto acá respondía 500 o se guardaba mal.
+  if (status !== undefined && status !== null && typeof status !== 'string') {
+    throw httpError(400, `Estado inválido. Opciones: ${VALID_STATUSES.join(', ')}`);
+  }
+  if (paymentMethod !== undefined && paymentMethod !== null && typeof paymentMethod !== 'string') {
+    throw httpError(400, `Método de pago inválido. Opciones: ${VALID_PAYMENT_METHODS.join(', ')}`);
+  }
+  if (customerPhone !== undefined && customerPhone !== null
+    && typeof customerPhone !== 'string' && typeof customerPhone !== 'number') {
+    throw httpError(400, 'Número inválido: 9 dígitos empezando con 9 (ej. 912345678).');
+  }
+  // PLAN-13: monto con tope. Vacío ('' o null) = "a coordinar" (total NULL).
+  if (totalClp !== undefined && totalClp !== null && totalClp !== '' && !isMontoClp(totalClp)) {
+    throw httpError(400, `Total inválido (${MONTO_RANGE_MSG}).`);
   }
   const saleStatus = status || 'pendiente_pago';
   if (!VALID_STATUSES.includes(saleStatus)) {
@@ -110,7 +129,7 @@ function createSale(input) {
     throw httpError(400, 'Número inválido: 9 dígitos empezando con 9 (ej. 912345678).');
   }
   // Cortesías van con total 0 (así las registra el dueño en su Excel)
-  const total = saleStatus === 'cortesia' ? 0 : (Number.isInteger(totalClp) && totalClp >= 0 ? totalClp : null);
+  const total = saleStatus === 'cortesia' ? 0 : (isMontoClp(totalClp) ? totalClp : null);
   const esEncargo = encargo === true;
 
   const insertSale = db.transaction(() => {
@@ -188,8 +207,12 @@ function updateSale(id, input, opts = {}) {
   if (paymentMethod !== undefined && paymentMethod !== null && !VALID_PAYMENT_METHODS.includes(paymentMethod)) {
     throw httpError(400, `Método de pago inválido. Opciones: ${VALID_PAYMENT_METHODS.join(', ')}`);
   }
-  if (totalClp !== undefined && totalClp !== null && (!Number.isInteger(totalClp) || totalClp < 0)) {
-    throw httpError(400, 'Total inválido.');
+  if (totalClp !== undefined && totalClp !== null && !isMontoClp(totalClp)) {
+    throw httpError(400, `Total inválido (${MONTO_RANGE_MSG}).`);
+  }
+  // PLAN-13: delivered se coerciona por truthiness; "no" marcaba entregado.
+  if (delivered !== undefined && typeof delivered !== 'boolean') {
+    throw httpError(400, 'delivered debe ser true o false.');
   }
   // PLAN-11: entero estricto ≥ 1. Antes `Number()` aceptaba "7" y 0, y una
   // cantidad 0 dejaba una venta viva que no reservaba nada.
@@ -239,7 +262,7 @@ function updateSale(id, input, opts = {}) {
       if (!Number.isInteger(finalQty) || finalQty <= 0 || finalQty > MAX_HALLACAS) {
         throw httpError(400, `Para concretar el encargo, quantityHallacas debe ser un entero entre 1 y ${MAX_HALLACAS}.`);
       }
-      if (!Number.isInteger(finalTotal) || finalTotal < 0) {
+      if (!isMontoClp(finalTotal)) {
         throw httpError(400, 'Para concretar el encargo, totalClp debe ser un entero mayor o igual a 0.');
       }
     }

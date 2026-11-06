@@ -11,6 +11,7 @@ const router = Router();
 
 const orderValidators = [
   body('name')
+    .isString().withMessage('El nombre debe ser texto.')
     .trim().notEmpty().withMessage('Nombre requerido.')
     .isLength({ max: 100 }).withMessage('El nombre es muy largo.'),
   body('phone')
@@ -24,20 +25,24 @@ const orderValidators = [
     .isInt({ min: 1, max: 99 }).withMessage('Cantidad debe ser entre 1 y 99.'),
   body('delivery')
     .optional()
+    .isString()
     .isIn(['retiro', 'despacho']).withMessage('Modalidad inválida.'),
   body('address')
     .if((value, { req }) => req.body.delivery === 'despacho')
+    .isString().withMessage('La dirección debe ser texto.')
     .trim().notEmpty().withMessage('La dirección (calle, número y comuna) es requerida para despacho.')
     // PLAN-11 (D12): sin .escape(). React ya escapa al mostrar y Telegram va
     // en texto plano; escapar acá guardaba "O&#x27;Higgins" en la BD.
     .isLength({ max: 200 }).withMessage('La dirección es muy larga.'),
   body('notes')
     .optional({ checkFalsy: true })
+    .isString().withMessage('Las notas deben ser texto.')
     .trim()
     // PLAN-11 (D12): sin .escape(), mismo motivo que address.
     .isLength({ max: 500 }).withMessage('Las notas no pueden superar 500 caracteres.'),
   body('dateHint')
     .optional({ checkFalsy: true })
+    .isString().withMessage('La fecha debe ser texto.')
     .trim()
     .isLength({ max: 50 }),
 ];

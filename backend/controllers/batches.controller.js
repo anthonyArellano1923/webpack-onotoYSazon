@@ -1,5 +1,6 @@
 const { db } = require('../database/db');
 const { esFechaValida } = require('../utils/fecha');
+const { isMontoClp, MONTO_RANGE_MSG } = require('../utils/limits');
 
 // Tope anti-envenenamiento, alineado con MAX_DELTA de stock.controller y con
 // los topes R-5 del checkout: protege de dedos pegados en el teclado, no de
@@ -64,8 +65,12 @@ function createBatch(req, res) {
   if (quantity > MAX_CANTIDAD) {
     return res.status(400).json({ error: `Cantidad fuera de rango (máximo ${MAX_CANTIDAD} por tanda).` });
   }
-  if (costTotalClp !== undefined && costTotalClp !== null && (!Number.isInteger(costTotalClp) || costTotalClp < 0)) {
-    return res.status(400).json({ error: 'El costo total debe ser un entero ≥ 0.' });
+  if (costTotalClp !== undefined && costTotalClp !== null && !isMontoClp(costTotalClp)) {
+    return res.status(400).json({ error: `El costo total debe ser un ${MONTO_RANGE_MSG}.` });
+  }
+  // PLAN-13: notes numérico/objeto reventaba en .trim() (500).
+  if (notes !== undefined && notes !== null && typeof notes !== 'string') {
+    return res.status(400).json({ error: 'Las notas deben ser texto.' });
   }
   // H-3: la fecha viaja al movimiento de stock y ordena el kardex.
   const fechaPedida = String(producedAt ?? '').trim() || null;
@@ -141,13 +146,16 @@ function updateBatch(req, res) {
     values.push(quantity);
   }
   if (costTotalClp !== undefined) {
-    if (!Number.isInteger(costTotalClp) || costTotalClp < 0) {
-      return res.status(400).json({ error: 'El costo total debe ser un entero ≥ 0.' });
+    if (!isMontoClp(costTotalClp)) {
+      return res.status(400).json({ error: `El costo total debe ser un ${MONTO_RANGE_MSG}.` });
     }
     updates.push('cost_total_clp = ?');
     values.push(costTotalClp);
   }
   if (notes !== undefined) {
+    if (notes !== null && typeof notes !== 'string') {
+      return res.status(400).json({ error: 'Las notas deben ser texto.' });
+    }
     updates.push('notes = ?');
     values.push(notes?.trim() || null);
   }

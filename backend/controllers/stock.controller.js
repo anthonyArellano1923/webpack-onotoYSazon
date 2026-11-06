@@ -121,7 +121,8 @@ function createMovement(req, res) {
   if (Math.abs(delta) > MAX_DELTA) {
     return res.status(400).json({ error: `Cantidad fuera de rango (máximo ${MAX_DELTA} por movimiento).` });
   }
-  const motivo = String(reason ?? '').trim();
+  // PLAN-13: String({}) = "[object Object]" pasaba el largo mínimo.
+  const motivo = typeof reason === 'string' ? reason.trim() : '';
   if (motivo.length < 3) {
     return res.status(400).json({ error: 'El motivo es obligatorio (mínimo 3 caracteres).' });
   }
