@@ -31,6 +31,11 @@ function classifyClientError(err) {
   if (err.type === 'entity.too.large') {
     return { status: 413, error: 'El cuerpo de la petición es demasiado grande.' };
   }
+  // Otros errores de body-parser (415 charset/encoding, 400 aborted...): llevan
+  // `type` y un status 4xx propio; son del cliente, no fallas del servidor.
+  if (typeof err.type === 'string' && err.status >= 400 && err.status < 500) {
+    return { status: err.status, error: 'Petición inválida.' };
+  }
   if (err.code === 'CORS_NOT_ALLOWED') {
     return { status: 403, error: 'Origen no permitido.' };
   }
