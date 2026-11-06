@@ -606,33 +606,48 @@ function seedPacks(db) {
   console.log('✓ Packs sembrados.');
 }
 
-function runMigrations(db) {
+/**
+ * Pasos de migración en orden de ejecución. Fuente única del orden: la usan
+ * runMigrations (tests) y database/schema.js (versionado con user_version).
+ * Agregar siempre AL FINAL: el índice + 1 (más el paso base de schema.js) es
+ * el número de versión de cada paso.
+ * @type {Array<{name: string, up: (db: import('better-sqlite3').Database) => void}>}
+ */
+const STEPS = [
   // Legadas (DBs muy viejas) primero, luego QA-16 (D-1 → D-2 → D-3), luego seeds.
-  migrateOrdersLegacy(db);
-  addOrdersAddressColumn(db);
-  migrateOrdersStatusEnum(db);
-  migrateUsersTable(db);
-  createProductionBatchesTable(db);
-  createStockMovementsTable(db);
-  addOrdersDeliveredAtColumn(db);
-  addOrdersBatchIdColumn(db);
-  migrateOrdersFinalStatusEnum(db);
+  { name: 'orders-legacy', up: migrateOrdersLegacy },
+  { name: 'orders-address', up: addOrdersAddressColumn },
+  { name: 'orders-status-enum', up: migrateOrdersStatusEnum },
+  { name: 'users-table', up: migrateUsersTable },
+  { name: 'production-batches', up: createProductionBatchesTable },
+  { name: 'stock-movements', up: createStockMovementsTable },
+  { name: 'orders-delivered-at', up: addOrdersDeliveredAtColumn },
+  { name: 'orders-batch-id', up: addOrdersBatchIdColumn },
+  { name: 'orders-final-status-enum', up: migrateOrdersFinalStatusEnum },
   // Después del swap final (que recrea orders sin esta columna): puramente
   // aditiva e independiente del enum de status.
-  addOrdersStockExemptColumn(db);
+  { name: 'orders-stock-exempt', up: addOrdersStockExemptColumn },
   // PLAN-11: al final de las migraciones de orders, después de todo swap, para
   // que ninguna recreación de la tabla borre las columnas nuevas.
-  addOrdersReviewColumns(db);
-  // STOCK FASE 2: después de las columnas de revisión, porque el backfill del
-  // ledger usa LIVE_ORDER_SQL (confirmed_at, expires_at).
-  // Antes del ledger: LIVE_ORDER_SQL (que usa su backfill) lee deleted_at.
-  addOrdersDeletedAtColumn(db);
-  migrateStockMovementsLedger(db);
-  createOrderEventsTable(db);
-  seedSettings(db);
-  seedPacks(db);
+  { name: 'orders-review-columns', up: addOrdersReviewColumns },
+  // STOCK FASE 2: antes del ledger, porque LIVE_ORDER_SQL (que usa su
+  // backfill) lee deleted_at y confirmed_at/expires_at.
+  { name: 'orders-deleted-at', up: addOrdersDeletedAtColumn },
+  { name: 'stock-movements-ledger', up: migrateStockMovementsLedger },
+  { name: 'order-events', up: createOrderEventsTable },
+  { name: 'seed-settings', up: seedSettings },
+  { name: 'seed-packs', up: seedPacks },
+];
+
+/**
+ * Corre todos los pasos sin versionar (cada uno es idempotente). El arranque
+ * real usa database/schema.js; esto queda para los tests de migraciones.
+ * @param {import('better-sqlite3').Database} db
+ */
+function runMigrations(db) {
+  for (const step of STEPS) step.up(db);
 }
 
 module.exports = {
-  runMigrations, withTableSwap, addOrdersReviewColumns, backfillOrderLedger,
+  runMigrations, STEPS, withTableSwap, addOrdersReviewColumns, backfillOrderLedger,
 };

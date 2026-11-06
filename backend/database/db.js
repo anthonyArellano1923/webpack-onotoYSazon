@@ -4,7 +4,6 @@ const fs = require('fs');
 const bcrypt = require('bcrypt');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'onoto.db');
-const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const db = new Database(DB_PATH);
@@ -13,13 +12,10 @@ const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
-// CREATE TABLE IF NOT EXISTS — seguro ejecutar múltiples veces
-const schema = fs.readFileSync(SCHEMA_PATH, 'utf8');
-db.exec(schema);
-
-// Trae al día bases de datos creadas con el schema viejo (idempotente)
-const { runMigrations } = require('./migrate');
-runMigrations(db);
+// Esquema versionado (PRAGMA user_version): crea una BD nueva o trae al día una
+// existente, siempre al mismo esquema final. Ver database/schema.js.
+const { migrateToLatest } = require('./schema');
+migrateToLatest(db);
 
 function createAdminIfNeeded() {
   // El login ahora es por teléfono: el admin se identifica con ADMIN_PHONE
