@@ -9,6 +9,7 @@ import {
 import { formatCLP } from './Sections';
 import { normalizePhone, phoneToDigits } from '../utils/phone';
 import { IconClose, IconTrash } from './Icons';
+import useModalFocus from '../hooks/useModalFocus';
 
 // QA-16: 'entregado'/'pendiente_entrega' salieron del enum de estado — la
 // entrega es ahora su propia columna (delivered_at), no un estado de pago.
@@ -50,14 +51,11 @@ export default function AdminDashboard({ onClose, onCatalogChange }) {
     setTab('ventas');
   }
 
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  // Foco, trampa de Tab, Esc y retorno del foco al disparador.
+  const dialogRef = useModalFocus(onClose);
 
   return (
-    <div className="admin-panel" role="dialog" aria-modal="true" aria-label="Panel de administración">
+    <div className="admin-panel" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Panel de administración">
       <div className="admin-panel__header">
         <h2 className="modal__title" style={{ margin: 0 }}>
           Panel <span className="modal__title-em">de administración</span>

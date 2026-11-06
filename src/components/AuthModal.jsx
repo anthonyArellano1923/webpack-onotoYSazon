@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { registerUser, loginUser, saveAuth } from '../services/api';
 import { normalizePhone, phoneToDigits } from '../utils/phone';
 import { IconClose } from './Icons';
+import useModalFocus from '../hooks/useModalFocus';
 
 /**
  * Autenticación por TELÉFONO (decisión del dueño: sus clientes viven en
@@ -9,6 +10,7 @@ import { IconClose } from './Icons';
  * la dirección es opcional y sirve para prellenar el despacho del carrito.
  */
 export default function AuthModal({ onClose, onSuccess, initialTab = 'login' }) {
+  const dialogRef = useModalFocus(onClose);
   // QA-04: la pestaña inicial es parametrizable — el CTA "Crear cuenta" del
   // modal de éxito debe aterrizar directo en el registro, no en login.
   const [tab, setTab] = useState(initialTab);
@@ -65,6 +67,7 @@ export default function AuthModal({ onClose, onSuccess, initialTab = 'login' }) 
   return (
     <div
       className="modal-overlay"
+      ref={dialogRef}
       onClick={onClose}
       role="dialog"
       aria-modal="true"

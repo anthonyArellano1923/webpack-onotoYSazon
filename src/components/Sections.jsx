@@ -1,5 +1,6 @@
 /* Sections.jsx — all section components for the Liquid Glass redesign */
 import { useState, useEffect, useRef } from 'react';
+import useModalFocus from '../hooks/useModalFocus';
 import imgHeroMobile from '../assets/images/hero-mobile.webp';
 import imgHeroDesktop from '../assets/images/hero-desktop.webp';
 import imgTraditionBig from '../assets/images/tradition-big.jpeg';
@@ -287,6 +288,7 @@ function MenuSection({ packs, onOpenPack, onAddToCart, favs, onToggleFav, stockA
 
 /* ---------- Pack Detail Modal ---------- */
 function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, cartHallacas }) {
+  const dialogRef = useModalFocus(onClose);
   const [qty, setQty] = useState(1);
   const [customQty, setCustomQty] = useState('');
   const [name, setName] = useState(user?.name || '');
@@ -403,7 +405,7 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, car
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="pack-modal-title">
+    <div className="modal-overlay" ref={dialogRef} onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="pack-modal-title">
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal__handle" aria-hidden="true"></div>
         <button className="modal__close" onClick={onClose} aria-label="Cerrar">
@@ -649,6 +651,7 @@ function CartModal({
   items, packs, user, onClose, onChangeQty, onRemove, onOrderSuccess, onOrderFailure, onOpenAuth,
   stockAvailable, cartHallacas, stockExceeded,
 }) {
+  const dialogRef = useModalFocus(onClose);
   const [name, setName] = useState(user?.name || '');
   const [phone, setPhone] = useState(user?.phone ? phoneToDigits(user.phone) : '');
   const [delivery, setDelivery] = useState('retiro');
@@ -755,7 +758,7 @@ function CartModal({
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="cart-modal-title">
+    <div className="modal-overlay" ref={dialogRef} onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="cart-modal-title">
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
         <div className="modal__handle" aria-hidden="true"></div>
         <button className="modal__close" onClick={onClose} aria-label="Cerrar carrito">

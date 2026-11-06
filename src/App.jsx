@@ -3,7 +3,7 @@
  * Orquesta tema, carrito, favoritos, modales y tweaks panel.
  * @module App
  */
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import staticPacks from './data/packs';
 import { WHATSAPP_URL } from './data/socials';
 import { IconCart, IconWhatsapp, IconCheck } from './components/Icons';
@@ -15,7 +15,8 @@ import {
   useTweaks, TweaksPanel, TweakSection, TweakSlider, TweakToggle,
 } from './lib/TweaksPanel';
 import AuthModal from './components/AuthModal';
-import AdminDashboard from './components/AdminDashboard';
+// El panel admin se carga bajo demanda: no viaja en el bundle público.
+const AdminDashboard = lazy(() => import('./components/AdminDashboard'));
 import { getStoredUser, clearAuth, getPacks } from './services/api';
 
 /* ---- Hooks ---- */
@@ -319,7 +320,9 @@ export default function App() {
         />
       )}
       {adminOpen && user?.role === 'admin' && (
-        <AdminDashboard onClose={() => setAdminOpen(false)} onCatalogChange={refreshPacks} />
+        <Suspense fallback={<div className="toast toast--visible" role="status">Cargando panel…</div>}>
+          <AdminDashboard onClose={() => setAdminOpen(false)} onCatalogChange={refreshPacks} />
+        </Suspense>
       )}
 
       {/* Tweaks panel */}
