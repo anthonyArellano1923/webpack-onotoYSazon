@@ -14,6 +14,7 @@ router.use(authLimiter);
 // se manejan por WhatsApp, no por correo). El email quedó opcional.
 const registerValidators = [
   body('name')
+    .isString().withMessage('El nombre debe ser texto.')
     .trim()
     .notEmpty().withMessage('El nombre es requerido.')
     .isLength({ min: 2, max: 100 }).withMessage('El nombre debe tener entre 2 y 100 caracteres.'),
@@ -21,6 +22,7 @@ const registerValidators = [
     .custom((value) => normalizePhone(value) !== null)
     .withMessage('Teléfono inválido. Debe ser un celular chileno de 9 dígitos (9XXXXXXXX).'),
   body('password')
+    .isString().withMessage('La contraseña debe ser texto.')
     .isLength({ min: 8 }).withMessage('La contraseña debe tener al menos 8 caracteres.')
     .matches(/[A-Z]/).withMessage('La contraseña debe tener al menos una letra mayúscula.')
     .matches(/[0-9]/).withMessage('La contraseña debe tener al menos un número.'),
@@ -39,7 +41,7 @@ const loginValidators = [
   body('phone')
     .custom((value) => normalizePhone(value) !== null)
     .withMessage('Teléfono inválido.'),
-  body('password').notEmpty().withMessage('Contraseña requerida.'),
+  body('password').isString().notEmpty().withMessage('Contraseña requerida.'),
 ];
 
 router.post('/register', registerValidators, handleValidationErrors, register);

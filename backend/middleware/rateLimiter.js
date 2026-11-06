@@ -1,13 +1,18 @@
 const rateLimit = require('express-rate-limit');
 
-// Rutas de auth: máximo 5 intentos por 15 minutos
-// skipSuccessfulRequests: solo cuenta los intentos fallidos
+// Rutas de auth: máximo 5 intentos por 15 minutos.
+// PLAN-13: solo cuentan las CREDENCIALES INCORRECTAS (401). Los errores de
+// validación (400) y los conflictos (409) no son intentos de adivinar una
+// contraseña. skipSuccessfulRequests + requestWasSuccessful: toda respuesta
+// que no sea 401 se descuenta. El 429 propio del limiter se mantiene contado
+// para que un cliente bloqueado no pueda reducir su contador.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: true,
+  requestWasSuccessful: (req, res) => res.statusCode !== 401 && res.statusCode !== 429,
   message: {
     error: 'Demasiados intentos. Por favor espera 15 minutos antes de intentar nuevamente.',
   },
