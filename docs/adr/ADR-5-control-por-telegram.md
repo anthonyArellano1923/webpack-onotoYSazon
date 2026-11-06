@@ -9,7 +9,7 @@
 
 ## 1. Contexto
 
-Desde ADR-4, el bot de Telegram solo **envía** avisos: pedido web nuevo, por vencer y vencido. El dueño sigue llevando sus pedidos en Notas de Mac, con este formato:
+Desde ADR-4, el bot de Telegram solo **envía** avisos: pedido web nuevo, por vencer y vencido. El dueño sigue llevando sus pedidos en Notas de Mac. Sus notas muestran qué datos maneja de cada pedido (nombre, cantidad de hallacas, estado de pago y estado de entrega):
 
 ```
 Tanda prueba:
@@ -25,7 +25,7 @@ Quiere operar desde el mismo chat en que recibe los avisos:
 - confirmar pedidos web;
 - marcar pagado, pendiente de pago y entregado.
 
-Así deja de mantener una segunda lista a mano.
+Así deja de mantener una segunda lista a mano. El formato de las notas solo ilustra esos datos: **no** es un formato de entrada para el bot (ver D7).
 
 ## 2. Decisiones
 
@@ -48,26 +48,27 @@ Así deja de mantener una segunda lista a mano.
   - `updateSale` acepta una `precondition` que corre sobre la fila releída **dentro** de la transacción `.immediate()`. El bot la usa para no aplicar nada sobre un pedido cancelado ni repetir un estado que ya tiene.
   - Chequear fuera de la transacción y escribir después dejaría una carrera: por ejemplo, un «Pagado» viejo sobre un pedido cancelado lo reactivaría, porque `updateOrder` permite `cancelado → pagado`.
   - Tras cada acción se responde `answerCallbackQuery` y se edita el mensaje con el resultado y los botones que siguen teniendo sentido.
-- **D7. Registro en el formato de Notas, siempre con confirmación previa.**
-  - El bot responde con un resumen y los botones **Confirmar/Cancelar**. Nada se escribe antes.
-  - Las líneas que no entiende se listan con su motivo y no se aplican: el parser no adivina.
-  - Los encabezados (`Algo:` sin nada después) se muestran como ignorados.
-  - Un nombre igual al de un pedido vivo genera un aviso «ojo: ya existe #ID», porque pegar dos veces la lista duplicaría pedidos.
-- **D8. Borradores en memoria.**
-  - El `callback_data` admite 64 bytes, así que el botón lleva un token de 12 caracteres hex y el borrador vive en un `Map` del proceso, con TTL de 30 minutos.
-  - El borrador se **borra antes de aplicarse**: un doble toque en Confirmar no registra dos veces.
-  - Si Render reinicia o redeploya, los borradores pendientes se pierden. El botón responde «expiró o ya se aplicó, reenvía el mensaje». No se pierde ningún pedido, porque nada se había escrito.
+- **D7. Registro guiado, sin texto libre.**
+  - `/nuevo` pide paso a paso: nombre, cantidad, teléfono (opcional, botón «Sin teléfono»), pagado o pendiente (botones) y encargo sí/no (botones). Al final muestra un resumen con **Confirmar/Cancelar**; nada se escribe antes.
+  - Atajo: `/nuevo <nombre> <cantidad>` salta a la pregunta del teléfono; el último argumento debe ser la cantidad.
+  - El bot solo lee texto escrito como respuesta al paso activo (nombre, cantidad, teléfono), y valida cada campo por separado: si no sirve, lo vuelve a preguntar. Fuera de un `/nuevo`, el texto libre recibe «usa /nuevo» y no se interpreta.
+  - Se descartó aceptar el formato de Notas pegado: interpretar frases obliga a adivinar variantes y un error de lectura registra un pedido equivocado.
+  - Un nombre igual al de un pedido vivo genera en el resumen un aviso «Ojo: ya existe #ID».
+  - Cualquier otro comando descarta el `/nuevo` en curso, para que un texto posterior no se tome como respuesta a una pregunta vieja. `/cancelar` lo descarta explícitamente.
+- **D8. Estado en memoria.**
+  - El `callback_data` admite 64 bytes. Los botones del flujo llevan `n:<token>:<opción>` y la pregunta de stock `d:<token>:ok|no`, con un token de 12 caracteres hex. El flujo (uno por chat) y la venta pendiente de `force` viven en `Map` del proceso, con TTL de 30 minutos.
+  - El token del flujo cambia en cada `/nuevo`: un botón de un flujo anterior responde «Este paso ya no está activo» y no hace nada.
+  - El flujo y la venta pendiente se **sacan antes de escribir**: un doble toque en Confirmar o en «Registrar igual» no registra dos veces.
+  - Si Render reinicia o redeploya, se pierde el `/nuevo` a medias. El botón responde «ya no está activo» o «expiró»; no se pierde ningún pedido, porque nada se había escrito.
   - Se descartó una tabla nueva porque añadiría una migración para un estado de pocos minutos.
 - **D9. Ventas desde el bot = venta manual del panel.**
-  - Nacen con `source='admin'`, confirmadas, sin límite por teléfono y con teléfono opcional.
-  - `Encargo` en la línea equivale a `encargo: true` (`stock_exempt = 1`).
-  - Una venta nueva marcada `Entregado` se crea y se marca entregada en **una** transacción, con savepoints anidados de better-sqlite3: nunca queda media venta.
-  - Un encargo no puede registrarse entregado. El backend exige concretarlo antes, así que el parser rechaza esa línea.
+  - Nacen con `source='admin'`, confirmadas, sin límite por teléfono y con teléfono opcional (`createSale`).
+  - «Encargo: sí» equivale a `encargo: true` (`stock_exempt = 1`): no descuenta stock y no pregunta por él.
+  - La entrega no se pregunta en `/nuevo`: el resultado trae el botón «Entregado», que pasa por `updateSale` como cualquier otro cambio.
 - **D10. Operar por `#ID`.**
-  - `/pedidos` lista con `#ID` en el mismo formato de Notas. Su salida vuelve a parsearse igual: es ida y vuelta.
-  - Una línea `#ID …` solo cambia pago y entrega.
-  - Si el nombre, la cantidad o el encargo no coinciden con la BD, la línea se señala y no se aplica, porque el dueño pudo equivocarse de ID. La cantidad y el teléfono se cambian en el panel.
-  - Con nombres repetidos, el `#ID` es la única forma inequívoca de operar.
+  - `/pedidos` es solo salida: una línea legible por pedido (`#12 Elías — 4 hallacas — Pagado — por entregar`) y una fila de botones por pedido (`✅ #12`, `✖️ #12`, `💰 #12`, `📦 #12`, según su estado; máximo 30 filas).
+  - Esos botones llevan el sufijo `:l`: tras aplicar la acción, el mensaje se redibuja con la lista actualizada.
+  - Los comandos de estado reciben el `#ID` (`/pagado 12`). Con nombres repetidos, el `#ID` es la única forma inequívoca de operar; el bot nunca busca pedidos por nombre.
 - **D11. Fuera del bot:** borrar pedidos, usuarios, precios y ajustes. Tampoco se anula desde el bot un pedido ya confirmado: «Rechazar» es solo para pedidos web sin validar.
 - **D12. Sin dependencias nuevas.** El bot usa el `fetch` nativo, en texto plano, sin `parse_mode`, igual que `notify.js`. Ahora `notify.callApi` es el único cliente de la Bot API. La respuesta 400 «message is not modified» se trata como no-op.
 
@@ -75,7 +76,8 @@ Así deja de mantener una segunda lista a mano.
 
 **Comandos:**
 
-- `/pedidos`: pedidos vivos y no cerrados, agrupados en «Por confirmar» y «Confirmados». Un pedido cerrado es uno entregado y pagado, o una cortesía.
+- `/nuevo` y `/nuevo <nombre> <cantidad>`: registro guiado (D7). `/cancelar` descarta el registro en curso.
+- `/pedidos`: pedidos vivos y no cerrados, agrupados en «Por confirmar» y «Confirmados», con botones por pedido. Un pedido cerrado es uno entregado y pagado, o una cortesía.
 - `/pendientes`: pedidos web por confirmar, más los vencidos de los últimos 7 días.
 - `/stock`: el desglose del panel (ADR-3).
 - `/confirmar <id>`, `/pagado <id>`, `/entregado <id>` y `/rechazar <id>`.
@@ -89,7 +91,7 @@ Así deja de mantener una segunda lista a mano.
 - `p:<id>`: Pagado.
 - `e:<id>`: Entregado.
 
-**`STOCK_INSUFICIENTE`.** El bot pregunta «Esto deja el stock en X. ¿Registrar igual?», donde X = `stock − requerido`. El botón reenvía la misma acción con `force`: en pedidos existentes, como `acción:id:f`; en ventas nuevas, como un borrador nuevo con `force: true`.
+**`STOCK_INSUFICIENTE`.** El bot pregunta «Esto deja el stock en X. ¿Registrar igual?», donde X = `stock − requerido`. El botón reenvía la misma acción con `force`: en pedidos existentes, como `acción:id:f`; en ventas nuevas de `/nuevo`, como `d:<token>:ok`, que registra la misma venta con `force: true`.
 
 ## 4. Operación
 
@@ -116,6 +118,6 @@ Con el webhook activo, `getUpdates` deja de funcionar. El chat ID se obtiene ant
 
 - **Secreto filtrado:** quien lo tenga puede fabricar updates con el chat ID del dueño, y la lista blanca no lo frena, porque el ID viaja en el cuerpo. El secreto vale lo mismo que el token del bot: solo vive en las variables de Render. Para rotarlo, se cambia la variable y se vuelve a correr el script.
 - **Grupos:** si `TELEGRAM_CHAT_ID` es un grupo, cualquier miembro puede operar el bot. Debe ser el chat privado del dueño, o un grupo solo con personas autorizadas.
-- **Borradores en memoria:** se pierden con un reinicio. Ver D8.
-- **Varias instancias:** los borradores y los `update_id` vistos son por proceso. Hoy Render corre una sola instancia, porque SQLite está en un disco local. Si eso cambia, hay que mover los borradores a la BD.
+- **Estado en memoria:** un `/nuevo` a medias se pierde con un reinicio. Ver D8.
+- **Varias instancias:** el flujo `/nuevo`, la venta pendiente de `force` y los `update_id` vistos son por proceso. Hoy Render corre una sola instancia, porque SQLite está en un disco local. Si eso cambia, hay que mover ese estado a la BD.
 - **Límite de 4096 caracteres:** los listados largos se dividen en varios mensajes por línea.
