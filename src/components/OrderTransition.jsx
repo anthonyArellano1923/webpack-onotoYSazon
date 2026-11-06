@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { IconCheck } from './Icons';
 import ContactSellerNotice from './ContactSellerNotice';
+import useModalFocus from '../hooks/useModalFocus';
 
 /**
  * Pantalla de transición mientras se guarda el pedido y se abre WhatsApp.
@@ -22,6 +23,9 @@ function OrderTransition({ waTab, waUrl, placeOrderPromise, user, onClose, onAdj
   const [successMsg, setSuccessMsg] = useState('');
   const [consulting, setConsulting] = useState(false);
   const consultingRef = useRef(false);
+  // Esc solo cierra cuando ya hay botones de salida: cerrar mientras se guarda
+  // cancelaría la navegación de la pestaña de WhatsApp.
+  const dialogRef = useModalFocus(ready ? onClose : undefined);
 
   useEffect(() => {
     let cancelled = false;
@@ -66,7 +70,7 @@ function OrderTransition({ waTab, waUrl, placeOrderPromise, user, onClose, onAdj
   };
 
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Preparando tu pedido">
+    <div className="modal-overlay" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Preparando tu pedido">
       <div className="modal" style={{ maxWidth: 420, textAlign: 'center', padding: '48px 32px' }}>
         {!ready ?
         <>

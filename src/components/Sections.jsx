@@ -1,9 +1,10 @@
 /* Sections.jsx — all section components for the Liquid Glass redesign */
 import { useState, useEffect, useRef } from 'react';
+import useModalFocus from '../hooks/useModalFocus';
 import imgHeroMobile from '../assets/images/hero-mobile.webp';
 import imgHeroDesktop from '../assets/images/hero-desktop.webp';
 import imgTraditionBig from '../assets/images/tradition-big.jpeg';
-import imgTraditionHands from '../assets/images/tradition-hands.jpeg';
+import imgTraditionHands from '../assets/images/tradition-hands.webp';
 import imgTraditionMaking from '../assets/images/tradition-making.jpeg';
 import imgContactMobile from '../assets/images/contact-mobile.webp';
 import imgContactDesktop from '../assets/images/contact-desktop.webp';
@@ -26,7 +27,9 @@ const DEFAULT_LIMITS = { maxHallacasPorTelefono: 20, holdHours: 24 };
 
 const formatCLP = (n) => {
   if (n == null) return "—";
-  return new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(n);
+  // El signo va antes del símbolo: -$137.000 (no $-137.000).
+  const abs = new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(Math.abs(n));
+  return n < 0 ? `-${abs}` : abs;
 };
 
 const stockIsKnown = (stockAvailable) => Number.isFinite(stockAvailable);
@@ -204,7 +207,7 @@ function MenuCard({ pack, onOpen, onAdd, isFav, onToggleFav, stockBlocked }) {
       </div>
       <div className="menu-card__top">
         <span className="menu-card__tag">
-          <IconSparkle size={11} /> {soldOut ? "Agotado" : pack.tag}
+          <IconSparkle size={11} /> {soldOut ? (pack.fallback ? "Consultar" : "Agotado") : pack.tag}
         </span>
         <button
           className={`menu-card__fav${isFav ? " menu-card__fav--active" : ""}`}
@@ -221,7 +224,7 @@ function MenuCard({ pack, onOpen, onAdd, isFav, onToggleFav, stockBlocked }) {
           <h3 className="menu-card__name">{pack.name}</h3>
           <div className="menu-card__row">
             <div className="menu-card__price">
-              {soldOut ? "Agotado" : (pack.price ? formatCLP(pack.price) : "Consulta")}
+              {soldOut ? (pack.fallback ? "Consultar" : "Agotado") : (pack.price ? formatCLP(pack.price) : "Consulta")}
             </div>
             {pack.price != null &&
             <button
@@ -293,6 +296,7 @@ function MenuSection({ packs, onOpenPack, onAddToCart, favs, onToggleFav, stockA
 
 /* ---------- Pack Detail Modal ---------- */
 function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, cartHallacas, limits = DEFAULT_LIMITS }) {
+  const dialogRef = useModalFocus(onClose);
   const [qty, setQty] = useState(1);
   const [customQty, setCustomQty] = useState('');
   const [name, setName] = useState(user?.name || '');
@@ -416,7 +420,7 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, car
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="pack-modal-title">
+    <div className="modal-overlay" ref={dialogRef} onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="pack-modal-title">
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal__handle" aria-hidden="true"></div>
         <button className="modal__close" onClick={onClose} aria-label="Cerrar">
@@ -559,12 +563,12 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, car
           <>
               <div className="modal__total">
                 <span className="modal__total-label">Total</span>
-                <span className="modal__total-value">{soldOut ? "Agotado" : formatCLP(total)}</span>
+                <span className="modal__total-value">{soldOut ? (pack.fallback ? "Consultar" : "Agotado") : formatCLP(total)}</span>
               </div>
               <button className="btn btn--primary modal__cta" onClick={add}
                 disabled={soldOut || selectionExceedsStock || selectionExceedsLimit}
                 style={{ opacity: (soldOut || selectionExceedsStock || selectionExceedsLimit) ? 0.5 : 1 }}>
-                {soldOut ? "Agotado" : ((selectionExceedsStock || selectionExceedsLimit) ? "Ajusta la cantidad" : "Añadir al carrito")}
+                {soldOut ? (pack.fallback ? "No disponible" : "Agotado") : ((selectionExceedsStock || selectionExceedsLimit) ? "Ajusta la cantidad" : "Añadir al carrito")}
               </button>
             </> :
 
@@ -574,7 +578,7 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, car
             disabled={!canSubmitCustom || soldOut}
             style={{ opacity: (canSubmitCustom && !soldOut) ? 1 : 0.5 }}>
 
-              <IconWhatsapp size={16} /> {soldOut ? "Agotado" : "Pedir"}
+              <IconWhatsapp size={16} /> {soldOut ? (pack.fallback ? "No disponible" : "Agotado") : "Pedir"}
             </button>
           }
         </div>
@@ -663,6 +667,7 @@ function CartModal({
   items, packs, user, onClose, onChangeQty, onRemove, onOrderSuccess, onOrderFailure, onOpenAuth,
   stockAvailable, cartHallacas, stockExceeded, limits = DEFAULT_LIMITS,
 }) {
+  const dialogRef = useModalFocus(onClose);
   const [name, setName] = useState(user?.name || '');
   const [phone, setPhone] = useState(user?.phone ? phoneToDigits(user.phone) : '');
   const [delivery, setDelivery] = useState('retiro');
@@ -772,7 +777,7 @@ function CartModal({
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="cart-modal-title">
+    <div className="modal-overlay" ref={dialogRef} onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="cart-modal-title">
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
         <div className="modal__handle" aria-hidden="true"></div>
         <button className="modal__close" onClick={onClose} aria-label="Cerrar carrito">

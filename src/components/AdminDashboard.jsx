@@ -9,6 +9,7 @@ import {
 import { formatCLP } from './Sections';
 import { normalizePhone, phoneToDigits } from '../utils/phone';
 import { IconClose, IconTrash, IconWhatsapp } from './Icons';
+import useModalFocus from '../hooks/useModalFocus';
 
 // QA-16: 'entregado'/'pendiente_entrega' salieron del enum de estado — la
 // entrega es ahora su propia columna (delivered_at), no un estado de pago.
@@ -95,14 +96,11 @@ export default function AdminDashboard({ onClose, onCatalogChange, onPendingChan
     setTab('ventas');
   }
 
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  // Foco, trampa de Tab, Esc y retorno del foco al disparador.
+  const dialogRef = useModalFocus(onClose);
 
   return (
-    <div className="admin-panel" role="dialog" aria-modal="true" aria-label="Panel de administración">
+    <div className="admin-panel" ref={dialogRef} role="dialog" aria-modal="true" aria-label="Panel de administración">
       <div className="admin-panel__header">
         <h2 className="modal__title" style={{ margin: 0 }}>
           Panel <span className="modal__title-em">de administración</span>
@@ -226,7 +224,7 @@ function VentasTab({ onCatalogChange, onPendingChange, showStockExemptOnly, onCl
   const [editingEncargoId, setEditingEncargoId] = useState(null);
 
   const load = useCallback(() => {
-    adminGetOrders().then((d) => { setOrders(d.orders); onPendingChange?.(); }).catch((e) => setError(e.message));
+    adminGetOrders().then((d) => { setOrders(d.orders); setError(''); onPendingChange?.(); }).catch((e) => setError(e.message));
   }, [onPendingChange]);
   useEffect(load, [load]);
 
@@ -282,7 +280,8 @@ function VentasTab({ onCatalogChange, onPendingChange, showStockExemptOnly, onCl
     onCatalogChange?.();
   }
 
-  if (error) return <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />;
+  // El error solo reemplaza la vista si aún no hay datos; con datos va como banner.
+  if (error && !orders) return <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />;
   if (!orders) return <p>Cargando…</p>;
 
   // PLAN-11: pedidos web sin validar (los cancelados no cuentan aunque `review` los marque).
@@ -297,6 +296,7 @@ function VentasTab({ onCatalogChange, onPendingChange, showStockExemptOnly, onCl
 
   return (
     <>
+      {error && <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />}
       <div style={{ marginBottom: 16 }}>
         <button className="btn btn--primary" onClick={() => setShowForm((s) => !s)}>
           {showForm ? 'Ocultar formulario' : '+ Añadir venta manual'}
@@ -751,7 +751,7 @@ function ProduccionTab({ onCatalogChange, onViewStockExemptOrders }) {
   const stockNegativo = stock < 0;
   // Las dos únicas situaciones en que el número necesita explicarse solo.
   const leyenda = stockNegativo
-    ? 'registraste más ventas que hallacas — haz un ingreso para cuadrar'
+    ? 'El stock quedó negativo: revisa egresos y ventas sin confirmar'
     : (stock === 0 ? 'nadie puede comprar hasta que ingreses hallacas' : null);
   const movimientos = kardex.movimientos || [];
 
@@ -1173,7 +1173,7 @@ function UsuariosTab() {
   const [error, setError] = useState('');
 
   const load = useCallback(() => {
-    adminGetUsers().then((d) => setUsers(d.users)).catch((e) => setError(e.message));
+    adminGetUsers().then((d) => { setUsers(d.users); setError(''); }).catch((e) => setError(e.message));
   }, []);
   useEffect(load, [load]);
 
@@ -1190,10 +1190,12 @@ function UsuariosTab() {
     }
   }
 
-  if (error) return <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />;
+  if (error && !users) return <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />;
   if (!users) return <p>Cargando…</p>;
 
   return (
+    <>
+      {error && <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />}
     <div className="admin-table-wrap">
       <table className="admin-table">
         <thead>
@@ -1222,6 +1224,7 @@ function UsuariosTab() {
         </tbody>
       </table>
     </div>
+    </>
   );
 }
 
@@ -1235,6 +1238,7 @@ function PacksTab({ onCatalogChange }) {
   const load = useCallback(() => {
     adminGetPacks().then((d) => {
       setPacks(d.packs);
+      setError('');
       setPrices(Object.fromEntries(d.packs.map((p) => [p.id, p.price_clp ?? ''])));
     }).catch((e) => setError(e.message));
   }, []);
@@ -1252,10 +1256,12 @@ function PacksTab({ onCatalogChange }) {
     }
   }
 
-  if (error) return <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />;
+  if (error && !packs) return <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />;
   if (!packs) return <p>Cargando…</p>;
 
   return (
+    <>
+      {error && <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />}
     <div className="admin-table-wrap">
       <table className="admin-table">
         <thead>
@@ -1293,6 +1299,7 @@ function PacksTab({ onCatalogChange }) {
         </tbody>
       </table>
     </div>
+    </>
   );
 }
 

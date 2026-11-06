@@ -16,6 +16,20 @@ const __dirname = path.dirname(__filename);
 
 // ------------------------------------------------------------------
 
+/**
+ * Production guard: the SPA has no /api proxy (vercel.json only rewrites to
+ * index.html), so a build without a valid API_URL would ship a bundle that
+ * calls the wrong host. Fail the build instead of deploying it.
+ */
+const API_URL = (process.env.API_URL || '').trim();
+if (!API_URL || !/^https?:\/\/.+\/api$/.test(API_URL)) {
+  throw new Error(
+    `[build] API_URL inválida o ausente (${JSON.stringify(API_URL)}). `
+    + 'Debe ser una URL absoluta que termine en "/api" sin barra final, '
+    + 'p. ej. https://mi-backend.onrender.com/api',
+  );
+}
+
 export default {
   mode: 'production',
   entry: path.resolve(__dirname, './src/index.jsx'),
@@ -68,7 +82,7 @@ export default {
   },
   plugins: [
     new webpack.DefinePlugin({
-      'process.env.API_URL': JSON.stringify(process.env.API_URL || ''),
+      'process.env.API_URL': JSON.stringify(API_URL),
     }),
     new HtmlWebpackPlugin({
       inject: true,

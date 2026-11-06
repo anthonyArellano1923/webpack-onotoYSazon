@@ -1642,3 +1642,51 @@ a { color: inherit; text-decoration: none; }
 .combo-list__option:hover, .combo-list__option:focus-visible {
   background: var(--surface-tint);
 }
+
+/* ============================================================
+   Auditoría 5-nov-2026 — móvil: objetivos táctiles, admin a 375 px,
+   botón flotante de WhatsApp.
+   ============================================================ */
+@media (max-width: 719px) {
+  /* Objetivos táctiles >= 44 px (los de estilo inline necesitan !important) */
+  .btn, .btn--glass, .btn--ghost, .nav__link, .admin-tab, .modal__close,
+  .menu-card__fav, .menu-card__add, .qty__btn, .combo-list__option,
+  .form-input, select.form-input, .footer a {
+    min-height: 44px;
+  }
+  .modal__close, .menu-card__fav, .menu-card__add, .qty__btn {
+    min-width: 44px;
+  }
+  .qty__btn { width: 44px !important; height: 44px !important; }
+  .admin-table .form-input { min-height: 44px; }
+  .admin-table .btn { min-height: 44px !important; padding-top: 8px !important; padding-bottom: 8px !important; }
+
+  /* Selects de Ventas: ancho suficiente para no truncar el texto */
+  .admin-table select.form-input { min-width: 150px; text-overflow: clip; padding-right: 28px; }
+
+  /* Scroll horizontal visible: sombras en los bordes + barra siempre presente */
+  .admin-table-wrap {
+    background:
+      linear-gradient(to right, var(--bg-elev) 30%, transparent) left center / 24px 100% no-repeat local,
+      linear-gradient(to left, var(--bg-elev) 30%, transparent) right center / 24px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, rgba(0,0,0,.28), transparent) left center / 12px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,.28), transparent) right center / 12px 100% no-repeat scroll;
+    scrollbar-width: thin;
+    padding-bottom: 2px;
+  }
+  /* La tabla debe ser transparente para que se vean las sombras de scroll del contenedor */
+  .admin-table-wrap { background-color: var(--bg-elev); }
+  .admin-table { background: transparent; }
+  .admin-table th { background: var(--surface-tint); }
+  .admin-table-wrap::-webkit-scrollbar { height: 8px; -webkit-appearance: none; }
+  .admin-table-wrap::-webkit-scrollbar-thumb { background: var(--fg-subtle); border-radius: 4px; }
+
+  /* El botón flotante de WhatsApp no debe tapar el final del contenido */
+  body { padding-bottom: 150px; }
+  .wa-fab { bottom: 16px; }
+  .cart-fab { bottom: 80px; }
+}
+@media (max-width: 719px) {
+  .auth-modal__error .btn { min-height: 44px !important; padding: 8px 14px !important; }
+  .nav__brand, .social-pill { min-height: 44px; display: inline-flex; align-items: center; }
+}

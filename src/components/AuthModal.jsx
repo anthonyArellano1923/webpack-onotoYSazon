@@ -2,13 +2,42 @@ import { useState } from 'react';
 import { registerUser, loginUser, saveAuth } from '../services/api';
 import { normalizePhone, phoneToDigits } from '../utils/phone';
 import { IconClose } from './Icons';
+import useModalFocus from '../hooks/useModalFocus';
 
 /**
  * Autenticación por TELÉFONO (decisión del dueño: sus clientes viven en
  * WhatsApp, no en el correo). El registro pide nombre, teléfono y contraseña;
  * la dirección es opcional y sirve para prellenar el despacho del carrito.
  */
+/**
+ * Mirrors the backend password rules (routes/auth.routes.js) so the user sees
+ * exactly what is missing instead of a generic «Datos inválidos».
+ * @param {string} pwd Candidate password.
+ * @returns {string[]} Human-readable list of unmet requirements.
+ */
+function passwordProblems(pwd) {
+  const out = [];
+  if (pwd.length < 8) out.push('al menos 8 caracteres');
+  if (!/[A-Z]/.test(pwd)) out.push('una letra mayúscula');
+  if (!/[0-9]/.test(pwd)) out.push('un número');
+  return out;
+}
+
+/**
+ * Builds the message to show for a failed request. Uses the backend's
+ * validation `details` ([{field, message}]) when the API layer keeps them.
+ * @param {Error & {details?: Array<{message: string}>}} err
+ * @returns {string}
+ */
+function describeError(err) {
+  if (Array.isArray(err.details) && err.details.length) {
+    return err.details.map((d) => d.message).join(' ');
+  }
+  return err.message;
+}
+
 export default function AuthModal({ onClose, onSuccess, initialTab = 'login' }) {
+  const dialogRef = useModalFocus(onClose);
   // QA-04: la pestaña inicial es parametrizable — el CTA "Crear cuenta" del
   // modal de éxito debe aterrizar directo en el registro, no en login.
   const [tab, setTab] = useState(initialTab);
@@ -48,6 +77,11 @@ export default function AuthModal({ onClose, onSuccess, initialTab = 'login' }) 
   async function handleRegister(e) {
     e.preventDefault();
     setError('');
+    const missing = passwordProblems(regPassword);
+    if (missing.length) {
+      setError(`La contraseña necesita: ${missing.join(', ')}.`);
+      return;
+    }
     setLoading(true);
     try {
       await registerUser({ name: regName, phone: regPhone, password: regPassword, address: regAddress || undefined });
@@ -56,7 +90,7 @@ export default function AuthModal({ onClose, onSuccess, initialTab = 'login' }) 
       saveAuth(data.accessToken, data.user);
       onSuccess(data.user);
     } catch (err) {
-      setError(err.message);
+      setError(describeError(err));
     } finally {
       setLoading(false);
     }
@@ -65,6 +99,7 @@ export default function AuthModal({ onClose, onSuccess, initialTab = 'login' }) 
   return (
     <div
       className="modal-overlay"
+      ref={dialogRef}
       onClick={onClose}
       role="dialog"
       aria-modal="true"
