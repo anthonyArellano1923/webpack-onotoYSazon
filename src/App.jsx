@@ -21,16 +21,22 @@ import { getStoredUser, clearAuth, getPacks } from './services/api';
 
 /* ---- Hooks ---- */
 function useTheme() {
-  const [theme, setTheme] = useState(() => {
-    const saved = localStorage.getItem('oys-theme');
-    if (saved) return saved;
+  const [theme, setThemeState] = useState(() => {
+    try {
+      const saved = localStorage.getItem('oys-theme');
+      if (saved === 'dark' || saved === 'light') return saved;
+    } catch { /* storage bloqueado */ }
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   });
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('oys-theme', theme);
   }, [theme]);
-  const toggle = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
+  // Solo se persiste una elección explícita; si no, se sigue el sistema.
+  const setTheme = useCallback((next) => {
+    setThemeState(next);
+    try { localStorage.setItem('oys-theme', next); } catch { /* ignorar */ }
+  }, []);
+  const toggle = () => setTheme(theme === 'dark' ? 'light' : 'dark');
   return [theme, toggle, setTheme];
 }
 
