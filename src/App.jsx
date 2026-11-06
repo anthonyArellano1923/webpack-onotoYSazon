@@ -285,7 +285,7 @@ export default function App() {
   const [pendingCount, setPendingCount] = useState(0);
   const refreshPending = useCallback(() => {
     adminGetOrders()
-      .then((d) => setPendingCount((d.orders || []).filter((o) => o.review === 'por_confirmar').length))
+      .then((d) => setPendingCount((d.orders || []).filter((o) => o.review === 'por_confirmar' && o.status !== 'cancelado').length))
       .catch(() => {});
   }, []);
   const isAdmin = user?.role === 'admin';
