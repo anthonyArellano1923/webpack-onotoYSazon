@@ -23,7 +23,9 @@ import OrderTransition from './OrderTransition';
 
 const formatCLP = (n) => {
   if (n == null) return "—";
-  return new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(n);
+  // El signo va antes del símbolo: -$137.000 (no $-137.000).
+  const abs = new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(Math.abs(n));
+  return n < 0 ? `-${abs}` : abs;
 };
 
 const stockIsKnown = (stockAvailable) => Number.isFinite(stockAvailable);
@@ -199,7 +201,7 @@ function MenuCard({ pack, onOpen, onAdd, isFav, onToggleFav, stockBlocked }) {
       </div>
       <div className="menu-card__top">
         <span className="menu-card__tag">
-          <IconSparkle size={11} /> {soldOut ? "Agotado" : pack.tag}
+          <IconSparkle size={11} /> {soldOut ? (pack.fallback ? "Consultar" : "Agotado") : pack.tag}
         </span>
         <button
           className={`menu-card__fav${isFav ? " menu-card__fav--active" : ""}`}
@@ -216,7 +218,7 @@ function MenuCard({ pack, onOpen, onAdd, isFav, onToggleFav, stockBlocked }) {
           <h3 className="menu-card__name">{pack.name}</h3>
           <div className="menu-card__row">
             <div className="menu-card__price">
-              {soldOut ? "Agotado" : (pack.price ? formatCLP(pack.price) : "Consulta")}
+              {soldOut ? (pack.fallback ? "Consultar" : "Agotado") : (pack.price ? formatCLP(pack.price) : "Consulta")}
             </div>
             {pack.price != null &&
             <button
@@ -547,12 +549,12 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, car
           <>
               <div className="modal__total">
                 <span className="modal__total-label">Total</span>
-                <span className="modal__total-value">{soldOut ? "Agotado" : formatCLP(total)}</span>
+                <span className="modal__total-value">{soldOut ? (pack.fallback ? "Consultar" : "Agotado") : formatCLP(total)}</span>
               </div>
               <button className="btn btn--primary modal__cta" onClick={add}
                 disabled={soldOut || selectionExceedsStock}
                 style={{ opacity: (soldOut || selectionExceedsStock) ? 0.5 : 1 }}>
-                {soldOut ? "Agotado" : (selectionExceedsStock ? "Ajusta la cantidad" : "Añadir al carrito")}
+                {soldOut ? (pack.fallback ? "Consultar" : "Agotado") : (selectionExceedsStock ? "Ajusta la cantidad" : "Añadir al carrito")}
               </button>
             </> :
 
@@ -562,7 +564,7 @@ function PackModal({ pack, user, onClose, onAdd, onOpenAuth, stockAvailable, car
             disabled={!canSubmitCustom || soldOut}
             style={{ opacity: (canSubmitCustom && !soldOut) ? 1 : 0.5 }}>
 
-              <IconWhatsapp size={16} /> {soldOut ? "Agotado" : "Pedir"}
+              <IconWhatsapp size={16} /> {soldOut ? (pack.fallback ? "Consultar" : "Agotado") : "Pedir"}
             </button>
           }
         </div>

@@ -97,8 +97,10 @@ export default function App() {
 
   /* Packs: la BD es la fuente de verdad (precios y disponibilidad editables
      desde el admin). packs.js queda como fallback visual si la API no
-     responde (sin flag `available` ⇒ todo se muestra disponible). */
-  const [packs, setPacks] = useState(staticPacks);
+     responde (se marcan `available:false` + `fallback:true`). */
+  // Fallback honesto: sin respuesta de la API no se sabe si hay stock, así que
+  // los packs estáticos se muestran como «Consultar» (no disponibles para comprar).
+  const [packs, setPacks] = useState(() => staticPacks.map((p) => ({ ...p, available: false, fallback: true })));
   const [stockAvailable, setStockAvailable] = useState(null);
   // QA-13: extraído a función reutilizable para poder refrescar el catálogo
   // desde el panel de admin tras cada guardado (packs, ajustes, ventas).
