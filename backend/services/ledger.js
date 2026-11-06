@@ -146,7 +146,17 @@ function catchUpOrder(orderId) {
  */
 function materializeExpirations() {
   const run = db.transaction(() => {
-    const ids = db.prepare(`SELECT id FROM orders WHERE ${EXPIRED_REVIEW_SQL}`).all();
+    // Solo los que tienen algo pendiente: sin evento 'expirado' o con reserva
+    // todavía anotada en el ledger. Los ya conciliados no se vuelven a mirar.
+    const ids = db.prepare(`
+      SELECT id FROM orders
+      WHERE ${EXPIRED_REVIEW_SQL}
+        AND (
+          NOT EXISTS (SELECT 1 FROM order_events e WHERE e.order_id = orders.id AND e.event = 'expirado')
+          OR (SELECT COALESCE(SUM(delta), 0) FROM stock_movements m
+              WHERE m.order_id = orders.id AND m.${ORDER_LEDGER_SQL}) <> 0
+        )
+    `).all();
     let n = 0;
     for (const { id } of ids) if (catchUpOrder(id)) n += 1;
     return n;

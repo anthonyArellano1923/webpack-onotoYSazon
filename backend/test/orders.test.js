@@ -53,7 +53,12 @@ test('T2: al vencer libera stock y sale de kardex y reportes', () => {
 
   const kardex = h.mockRes();
   getKardex({}, kardex);
-  assert.ok(!kardex.body.movimientos.some((m) => m.tipo === 'venta' && m.id === body.order.id));
+  // STOCK FASE 2: el kardex es el ledger; el vencido muestra su venta y su
+  // reverso, que se compensan, y el saldo vuelve a 50.
+  const lineas = kardex.body.movimientos.filter((m) => m.order_id === body.order.id);
+  assert.deepEqual(lineas.map((m) => m.kind).sort(), ['reverso', 'venta']);
+  assert.equal(lineas.reduce((sum, m) => sum + m.delta, 0), 0);
+  assert.equal(kardex.body.movimientos[0].saldo, 50);
 
   const r = reports();
   assert.equal(r.hallacas_vendidas, 0);

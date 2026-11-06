@@ -429,9 +429,14 @@ function migrateStockMovementsLedger(db) {
       `);
       // Un id de movimiento borrado no debe reutilizarse: el kardex y la
       // papelera del panel se refieren a los movimientos por id.
-      db.prepare(
+      // Si la tabla quedó vacía tras el copiado, sqlite_sequence no tiene fila
+      // para ella: se crea con el contador viejo.
+      const updated = db.prepare(
         "UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'stock_movements'"
-      ).run(seq);
+      ).run(seq).changes;
+      if (updated === 0 && seq > 0) {
+        db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('stock_movements', ?)").run(seq);
+      }
       const n = backfillOrderLedger(db);
       console.log(`✓ stock_movements migrado; ${n} asiento(s) de venta sembrados.`);
     });
