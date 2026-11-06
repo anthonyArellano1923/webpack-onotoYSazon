@@ -208,7 +208,8 @@ function VentasTab({ onCatalogChange, showStockExemptOnly, onClearStockExemptFil
     onCatalogChange?.();
   }
 
-  if (error) return <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />;
+  // El error solo reemplaza la vista si aún no hay datos; con datos va como banner.
+  if (error && !orders) return <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />;
   if (!orders) return <p>Cargando…</p>;
 
   const visibleOrders = showStockExemptOnly
@@ -217,6 +218,7 @@ function VentasTab({ onCatalogChange, showStockExemptOnly, onClearStockExemptFil
 
   return (
     <>
+      {error && <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />}
       <div style={{ marginBottom: 16 }}>
         <button className="btn btn--primary" onClick={() => setShowForm((s) => !s)}>
           {showForm ? 'Ocultar formulario' : '+ Añadir venta manual'}
@@ -560,7 +562,7 @@ function ProduccionTab({ onCatalogChange, onViewStockExemptOrders }) {
   const stockNegativo = stock < 0;
   // Las dos únicas situaciones en que el número necesita explicarse solo.
   const leyenda = stockNegativo
-    ? 'registraste más ventas que hallacas — haz un ingreso para cuadrar'
+    ? 'El stock quedó negativo: revisa egresos y ventas sin confirmar'
     : (stock === 0 ? 'nadie puede comprar hasta que ingreses hallacas' : null);
   const movimientos = kardex.movimientos || [];
 
@@ -984,11 +986,12 @@ function UsuariosTab() {
     }
   }
 
-  if (error) return <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />;
+  if (error && !users) return <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />;
   if (!users) return <p>Cargando…</p>;
 
   return (
     <div className="admin-table-wrap">
+      {error && <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />}
       <table className="admin-table">
         <thead>
           <tr><th>Nombre</th><th>Teléfono</th><th>Correo</th><th>Dirección</th><th>Rol</th><th>Creado</th><th></th></tr>
@@ -1046,11 +1049,12 @@ function PacksTab({ onCatalogChange }) {
     }
   }
 
-  if (error) return <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />;
+  if (error && !packs) return <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />;
   if (!packs) return <p>Cargando…</p>;
 
   return (
     <div className="admin-table-wrap">
+      {error && <ErrorMsg msg={error} onRetry={() => { setError(''); load(); }} />}
       <table className="admin-table">
         <thead>
           <tr><th>Pack</th><th>Hallacas</th><th>Precio CLP</th><th></th><th>Visible en la web</th></tr>
