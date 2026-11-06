@@ -101,6 +101,7 @@ export default {
         { from: 'public/sitemap.xml', to: '.' },
         { from: 'public/favicon.svg', to: '.' },
         { from: 'public/favicon.ico', to: '.' },
+        { from: 'public/og-hallaca.webp', to: '.' },
       ],
     }),
   ],

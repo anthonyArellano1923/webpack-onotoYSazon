@@ -1,3 +1,5 @@
+import { resolvePackImage } from '../data/packs.js';
+
 const BASE = process.env.API_URL || '/api';
 
 // PLAN-11: timeout por defecto de las llamadas (cold start de Render incluido).
@@ -110,7 +112,11 @@ export const getMyOrders = () => apiFetch('/orders/mine');
 
 // Catálogo público: la BD es la fuente de verdad (precios/disponibilidad
 // editables desde el admin); packs.js queda como fallback si la API no responde.
-export const getPacks = () => apiFetch('/packs');
+export const getPacks = () =>
+  apiFetch('/packs').then((data) => ({
+    ...data,
+    packs: data.packs?.map((p) => ({ ...p, image: resolvePackImage(p.image) })),
+  }));
 
 /* ---- Panel admin (todas requieren token con role=admin) ---- */
 export const adminGetOrders = () => apiFetch('/admin/orders');
@@ -123,7 +129,12 @@ export const adminDeleteOrder = (id) => apiFetch(`/admin/orders/${id}`, { method
 export const adminGetUsers = () => apiFetch('/admin/users');
 // QA-12 (ampliado): borrado físico de usuario (403 si es admin, lo maneja el backend).
 export const adminDeleteUser = (id) => apiFetch(`/admin/users/${id}`, { method: 'DELETE' });
-export const adminGetPacks = () => apiFetch('/admin/packs');
+export const adminGetPacks = () =>
+  apiFetch('/admin/packs').then((data) => (
+    Array.isArray(data?.packs)
+      ? { ...data, packs: data.packs.map((p) => ({ ...p, image: resolvePackImage(p.image) })) }
+      : data
+  ));
 export const adminUpdatePack = (id, body) =>
   apiFetch(`/admin/packs/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
 export const adminGetSettings = () => apiFetch('/admin/settings');

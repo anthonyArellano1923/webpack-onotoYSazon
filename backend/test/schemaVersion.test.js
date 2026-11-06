@@ -113,3 +113,15 @@ test('BD con versión mayor a la conocida no se toca', () => {
   assert.equal(conn.pragma('user_version', { simple: true }), LATEST_VERSION + 5);
   assert.equal(conn.prepare("SELECT COUNT(*) AS n FROM sqlite_master").get().n, 0);
 });
+
+test('migración pack-images-to-keys reescribe URLs de i.ibb.co a claves y es idempotente', () => {
+  const conn = openDb();
+  migrateToLatest(conn);
+  conn.prepare("UPDATE packs SET image = 'https://i.ibb.co/abc/x.jpg' WHERE id = 'p1'").run();
+  const step = getSteps().find((s) => s.name === 'pack-images-to-keys');
+  step.up(conn);
+  step.up(conn);
+  const rows = conn.prepare('SELECT id, image FROM packs').all();
+  assert.ok(rows.length > 0);
+  for (const r of rows) assert.equal(r.image, `pack-${r.id}`);
+});

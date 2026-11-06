@@ -564,28 +564,28 @@ const PACKS_SEED = [
     tag: 'Para ti', tagline: 'Perfecta para conocer el sabor.',
     description: 'Una hallaca tradicional venezolana, hecha a mano con masa de maíz teñida con onoto, guiso de res, cerdo y pollo, aceitunas, alcaparras, pasitas y aliños frescos. Envuelta en hoja de plátano y amarrada con pabilo, como manda la tradición.',
     ingredients: ['Masa de maíz', 'Onoto', 'Guiso mixto', 'Aceitunas', 'Pasitas', 'Hoja de plátano'],
-    image: 'https://i.ibb.co/v62n8w2B/b064c458a44e20aeda58f5ae48a2e546.jpg',
+    image: 'pack-p1',
   },
   {
     id: 'p4', name: 'Cena íntima', qty: 4, qty_label: '4 hallacas', price_clp: 13000,
     tag: 'Popular', tagline: 'Para una cena en pareja o entre dos.',
     description: 'Cuatro hallacas envueltas en hoja de plátano, listas para calentar al baño maría. Vienen con pan de jamón en porción y un toque de ensalada de gallina si lo pides extra. Suficiente para una cena sentada para dos personas con sobras al día siguiente.',
     ingredients: ['4 hallacas', 'Pan de jamón', 'Hoja de plátano', 'Pabilo tradicional'],
-    image: 'https://i.ibb.co/m5xVgYsW/60194f47fd48bb2bc2fefe1c651d412e.jpg',
+    image: 'pack-p4',
   },
   {
     id: 'p10', name: 'Cena familiar', qty: 10, qty_label: '10 hallacas', price_clp: 32000,
     tag: 'Mejor valor', tagline: 'El plato fuerte de la mesa familiar.',
     description: 'Diez hallacas para una mesa de familia. Incluye pan de jamón completo, ensalada de gallina y un pernil pequeño para acompañar — la cena navideña venezolana clásica, lista para servir. Ideal para 5–6 personas con segundo plato al día siguiente.',
     ingredients: ['10 hallacas', 'Pan de jamón entero', 'Ensalada de gallina', 'Pernil pequeño'],
-    image: 'https://i.ibb.co/JF8jdwxg/f06f9930c92b0ff9b5f0754d1464d89e.jpg',
+    image: 'pack-p10',
   },
   {
     id: 'pXL', name: 'Diciembre completo', qty: 10, qty_label: '+10 hallacas', price_clp: null,
     tag: 'Por encargo', tagline: 'Para que tu casa huela a Caracas en diciembre.',
     description: 'Pedido grande — más de 10 hallacas. Cuéntanos cuántas necesitas y coordinamos contigo cantidad, retiro o despacho y precio. Ideal para encuentros familiares grandes, fiestas de fin de año o regalos para tu gente. Pedido con 5 días de anticipación.',
     ingredients: ['10+ hallacas', 'Misma receta tradicional', 'Coordinación directa', 'Entrega o retiro'],
-    image: 'https://i.ibb.co/LdGZg9fN/a73918b40d264892fb9b81da7fce9846.jpg',
+    image: 'pack-pXL',
   },
 ];
 
@@ -604,6 +604,17 @@ function seedPacks(db) {
     });
   })();
   console.log('✓ Packs sembrados.');
+}
+
+/**
+ * Reemplaza las URLs de i.ibb.co por claves de asset (`pack-<id>`): el front
+ * las resuelve a imágenes empaquetadas por Webpack. Idempotente.
+ * @param {import('better-sqlite3').Database} db
+ */
+function migratePackImagesToKeys(db) {
+  db.prepare(
+    "UPDATE packs SET image = 'pack-' || id WHERE image LIKE 'https://i.ibb.co/%'"
+  ).run();
 }
 
 /**
@@ -637,6 +648,7 @@ const STEPS = [
   { name: 'order-events', up: createOrderEventsTable },
   { name: 'seed-settings', up: seedSettings },
   { name: 'seed-packs', up: seedPacks },
+  { name: 'pack-images-to-keys', up: migratePackImagesToKeys },
 ];
 
 /**
